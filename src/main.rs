@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 
-/// MJML to PO converter and reverse
+/// Generic XML/HTML to PO converter and reverse
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
@@ -22,62 +22,220 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Extract translatable strings from MJML files to create PO files
+    /// Extract translatable strings from XML/HTML files to create PO files
     Extract {
-        /// Input MJML files
+        /// Input files
         #[clap(required = true)]
         input: Vec<String>,
 
         /// Output PO file
         #[clap(short, long)]
         output: Option<String>,
+
+        /// Format type (mjml, html)
+        #[clap(short, long, default_value = "mjml")]
+        format: String,
     },
 
-    /// Compile PO file back into MJML with translated content
+    /// Compile PO file back into XML/HTML with translated content
     Compile {
-        /// Input MJML file
+        /// Input file
         #[clap(short, long)]
-        mjml: String,
+        input: String,
 
         /// Input PO file
         #[clap(short, long)]
         po: String,
 
-        /// Output MJML file (stdout if not specified)
+        /// Output file (stdout if not specified)
         #[clap(short, long)]
         output: Option<String>,
+
+        /// Format type (mjml, html)
+        #[clap(short, long, default_value = "mjml")]
+        format: String,
     },
+}
+
+/// Trait for format-specific extraction rules
+trait ExtractionStrategy {
+    /// Determine if an element should have its text content extracted
+    fn is_translatable_element(&self, element_name: &str) -> bool;
+
+    /// Determine if text content should be translated
+    fn is_translatable_text(&self, text: &str) -> bool;
+
+    /// Get the file extension for this format
+    fn file_extension(&self) -> &str;
+}
+
+#[cfg(feature = "mjml")]
+struct MjmlStrategy;
+
+#[cfg(feature = "mjml")]
+impl ExtractionStrategy for MjmlStrategy {
+    fn is_translatable_element(&self, element_name: &str) -> bool {
+        matches!(element_name, "mj-title" | "mj-text" | "mj-button")
+    }
+
+    fn is_translatable_text(&self, text: &str) -> bool {
+        is_translatable_text_common(text)
+    }
+
+    fn file_extension(&self) -> &str {
+        ".mjml"
+    }
+}
+
+#[cfg(feature = "html")]
+struct HtmlStrategy;
+
+#[cfg(feature = "html")]
+impl ExtractionStrategy for HtmlStrategy {
+    fn is_translatable_element(&self, element_name: &str) -> bool {
+        matches!(
+            element_name,
+            "p" | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "span"
+                | "div"
+                | "a"
+                | "button"
+                | "label"
+                | "li"
+                | "td"
+                | "th"
+                | "title"
+                | "option"
+                | "strong"
+                | "em"
+                | "b"
+                | "i"
+        )
+    }
+
+    fn is_translatable_text(&self, text: &str) -> bool {
+        is_translatable_text_common(text)
+    }
+
+    fn file_extension(&self) -> &str {
+        ".html"
+    }
+}
+
+fn is_translatable_text_common(text: &str) -> bool {
+    // Exclude URLs
+    if text.starts_with("http://") || text.starts_with("https://") {
+        return false;
+    }
+
+    // Exclude text that looks like URLs or file paths
+    if text.contains("://") {
+        return false;
+    }
+
+    // Exclude text that looks like email addresses (but allow placeholders)
+    if text.contains("@") && text.contains(".") && !text.contains("{{") {
+        return false;
+    }
+
+    // Exclude pure whitespace
+    if text.trim().is_empty() {
+        return false;
+    }
+
+    // Exclude text that's purely numbers or symbols
+    let has_letter = text.chars().any(|c| c.is_alphabetic());
+    if !has_letter {
+        return false;
+    }
+
+    true
+}
+
+fn get_strategy(format: &str) -> Result<Box<dyn ExtractionStrategy>> {
+    match format.to_lowercase().as_str() {
+        #[cfg(feature = "mjml")]
+        "mjml" => Ok(Box::new(MjmlStrategy)),
+        #[cfg(feature = "html")]
+        "html" => Ok(Box::new(HtmlStrategy)),
+        _ => {
+            #[cfg(not(any(feature = "mjml", feature = "html")))]
+            {
+                anyhow::bail!("No format features enabled. Enable 'mjml' or 'html' feature.");
+            }
+            #[cfg(any(feature = "mjml", feature = "html"))]
+            {
+                anyhow::bail!(
+                    "Unsupported format: {}. Available formats: {}",
+                    format,
+                    get_available_formats()
+                );
+            }
+        }
+    }
+}
+
+fn get_available_formats() -> String {
+    let mut formats = Vec::new();
+    #[cfg(feature = "mjml")]
+    formats.push("mjml");
+    #[cfg(feature = "html")]
+    formats.push("html");
+    formats.join(", ")
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Extract { input, output } => {
-            extract_command(input, output.as_deref(), cli.verbose)
-        }
-        Commands::Compile { mjml, po, output } => {
-            compile_command(mjml, po, output.as_deref(), cli.verbose)
-        }
+        Commands::Extract {
+            input,
+            output,
+            format,
+        } => extract_command(input, output.as_deref(), format, cli.verbose),
+        Commands::Compile {
+            input,
+            po,
+            output,
+            format,
+        } => compile_command(input, po, output.as_deref(), format, cli.verbose),
     }
 }
 
-fn extract_command(input_files: &[String], output_file: Option<&str>, verbose: bool) -> Result<()> {
+fn extract_command(
+    input_files: &[String],
+    output_file: Option<&str>,
+    format: &str,
+    verbose: bool,
+) -> Result<()> {
     if input_files.is_empty() {
-        eprintln!("At least one input file is required");
-        std::process::exit(1);
+        anyhow::bail!("At least one input file is required");
     }
+
+    let strategy = get_strategy(format)?;
 
     let output_path = match output_file {
         Some(path) => path.to_string(),
         None => {
             let first_input = &input_files[0];
-            first_input.trim_end_matches(".mjml").to_string() + ".po"
+            first_input
+                .trim_end_matches(strategy.file_extension())
+                .to_string()
+                + ".po"
         }
     };
 
     if verbose {
-        println!("Processing {} MJML files...", input_files.len());
+        println!(
+            "Processing {} {} files...",
+            input_files.len(),
+            format.to_uppercase()
+        );
     }
 
     let mut messages: HashMap<String, Vec<String>> = HashMap::new();
@@ -86,7 +244,7 @@ fn extract_command(input_files: &[String], output_file: Option<&str>, verbose: b
         if verbose {
             println!("  Extracting from: {}", input_path);
         }
-        extract_messages_from_file(input_path, &mut messages, verbose)?;
+        extract_messages_from_file(input_path, &mut messages, strategy.as_ref(), verbose)?;
     }
 
     if verbose {
@@ -105,11 +263,14 @@ fn extract_command(input_files: &[String], output_file: Option<&str>, verbose: b
 }
 
 fn compile_command(
-    mjml_file: &str,
+    input_file: &str,
     po_file: &str,
     output_file: Option<&str>,
+    format: &str,
     verbose: bool,
 ) -> Result<()> {
+    let strategy = get_strategy(format)?;
+
     if verbose {
         println!("Loading translations from: {}", po_file);
     }
@@ -134,36 +295,44 @@ fn compile_command(
 
     if verbose {
         println!("Loaded {} translations from PO file", translation_count);
-        println!("Reading MJML file: {}", mjml_file);
+        println!("Reading {} file: {}", format.to_uppercase(), input_file);
     }
 
-    // Read MJML file
-    let mut mjml_content = String::new();
-    let mut file = File::open(mjml_file)
-        .with_context(|| format!("Failed to open MJML file: {}", mjml_file))?;
-    file.read_to_string(&mut mjml_content)?;
+    // Read input file
+    let mut content = String::new();
+    let mut file = File::open(input_file)
+        .with_context(|| format!("Failed to open input file: {}", input_file))?;
+    file.read_to_string(&mut content)?;
 
     if verbose {
         println!("Applying translations...");
     }
 
     // Apply translations
-    let translated_mjml = apply_translations(&mjml_content, &translations, verbose)?;
+    let translated = apply_translations(&content, &translations, strategy.as_ref(), verbose)?;
 
     // Write output
     match output_file {
         Some(path) => {
             let mut output = File::create(path)
                 .with_context(|| format!("Failed to create output file: {}", path))?;
-            write!(output, "{}", translated_mjml)?;
+            write!(output, "{}", translated)?;
             if verbose {
-                println!("✅ Translated MJML file created: {}", path);
+                println!(
+                    "✅ Translated {} file created: {}",
+                    format.to_uppercase(),
+                    path
+                );
             } else {
-                println!("Translated MJML file created: {}", path);
+                println!(
+                    "Translated {} file created: {}",
+                    format.to_uppercase(),
+                    path
+                );
             }
         }
         None => {
-            print!("{}", translated_mjml);
+            print!("{}", translated);
         }
     }
 
@@ -173,6 +342,7 @@ fn compile_command(
 fn extract_messages_from_file(
     file_path: &str,
     messages: &mut HashMap<String, Vec<String>>,
+    strategy: &dyn ExtractionStrategy,
     verbose: bool,
 ) -> Result<()> {
     let file =
@@ -193,11 +363,9 @@ fn extract_messages_from_file(
                 let text = e.unescape()?;
                 let trimmed_text = text.trim();
 
-                // Only extract text from specific elements that contain user-visible content
-                // and exclude URLs and other non-translatable content
                 if !trimmed_text.is_empty()
-                    && is_user_visible_element(&current_element)
-                    && is_translatable_text(trimmed_text)
+                    && strategy.is_translatable_element(&current_element)
+                    && strategy.is_translatable_text(trimmed_text)
                 {
                     let line = reader.buffer_position();
                     let reference = format!("{}:{}", file_path, line);
@@ -212,11 +380,9 @@ fn extract_messages_from_file(
                 let text = String::from_utf8(e.into_inner().to_vec())?;
                 let trimmed_text = text.trim();
 
-                // Only extract text from specific elements that contain user-visible content
-                // and exclude URLs and other non-translatable content
                 if !trimmed_text.is_empty()
-                    && is_user_visible_element(&current_element)
-                    && is_translatable_text(trimmed_text)
+                    && strategy.is_translatable_element(&current_element)
+                    && strategy.is_translatable_text(trimmed_text)
                 {
                     let line = reader.buffer_position();
                     let reference = format!("{}:{}", file_path, line);
@@ -239,32 +405,6 @@ fn extract_messages_from_file(
     }
 
     Ok(())
-}
-
-fn is_user_visible_element(element_name: &str) -> bool {
-    match element_name {
-        "mj-title" | "mj-text" | "mj-button" => true,
-        _ => false,
-    }
-}
-
-fn is_translatable_text(text: &str) -> bool {
-    // Exclude URLs
-    if text.starts_with("http://") || text.starts_with("https://") {
-        return false;
-    }
-
-    // Exclude text that looks like URLs or file paths
-    if text.contains("://") {
-        return false;
-    }
-
-    // Exclude text that looks like email addresses (but allow placeholders)
-    if text.contains("@") && text.contains(".") && !text.contains("{{") {
-        return false;
-    }
-
-    true
 }
 
 fn write_po_file(
@@ -333,12 +473,12 @@ fn write_po_file(
 }
 
 fn apply_translations(
-    mjml_content: &str,
+    content: &str,
     translations: &HashMap<String, String>,
+    strategy: &dyn ExtractionStrategy,
     verbose: bool,
 ) -> Result<String> {
-    let mut reader = Reader::from_str(mjml_content);
-
+    let mut reader = Reader::from_str(content);
     let mut writer = quick_xml::Writer::new(Vec::new());
 
     let mut buf = Vec::new();
@@ -357,7 +497,7 @@ fn apply_translations(
                 writer.write_event(&Event::Start(e.clone()))?;
 
                 // Check if this element contains translatable text
-                if is_user_visible_element(&current_element) {
+                if strategy.is_translatable_element(&current_element) {
                     inside_text_content = true;
                     text_buffer.clear();
                 } else {
@@ -374,10 +514,10 @@ fn apply_translations(
             Ok(Event::End(ref e)) => {
                 if inside_text_content && !element_stack.is_empty() {
                     let element_name = &element_stack[element_stack.len() - 1];
-                    if is_user_visible_element(element_name) {
+                    if strategy.is_translatable_element(element_name) {
                         // Process the accumulated text
                         let trimmed_text = text_buffer.trim();
-                        if !trimmed_text.is_empty() && is_translatable_text(trimmed_text) {
+                        if !trimmed_text.is_empty() && strategy.is_translatable_text(trimmed_text) {
                             if let Some(translation) = translations.get(trimmed_text) {
                                 // Write translated text with preserved formatting
                                 let translated_with_padding =

@@ -1,4 +1,4 @@
-# mjml2po
+# xml2po
 
 A Rust utility to extract translatable strings from MJML email templates and generate PO (Portable Object) files for localization.
 
@@ -17,14 +17,14 @@ A Rust utility to extract translatable strings from MJML email templates and gen
 ## Installation
 
 ```bash
-cargo install mjml2po
+cargo install xml2po
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/your-username/mjml2po.git
-cd mjml2po
+git clone https://github.com/your-username/xml2po.git
+cd xml2po
 cargo build --release
 ```
 
@@ -33,28 +33,28 @@ cargo build --release
 ### Extract command - Generate PO files from MJML:
 ```bash
 # Single file processing
-mjml2po extract template.mjml
+xml2po extract template.mjml
 # Creates template.po
 
 # Multiple files with auto-generated output
-mjml2po extract template1.mjml template2.mjml
+xml2po extract template1.mjml template2.mjml
 # Creates template1.po (or template2.po)
 
 # Multiple files with specific output
-mjml2po extract template1.mjml template2.mjml translations.po
+xml2po extract template1.mjml template2.mjml translations.po
 # Creates translations.po
 
 # Process all MJML files in a directory
-mjml2po extract emails/*.mjml translations.po
+xml2po extract emails/*.mjml translations.po
 ```
 
 ### Compile command - Apply translations to MJML:
 ```bash
 # Compile PO file back into MJML with translated content
-mjml2po compile --mjml template.mjml --po translations.po --output translated.mjml
+xml2po compile --mjml template.mjml --po translations.po --output translated.mjml
 
 # Output to stdout
-mjml2po compile --mjml template.mjml --po translations.po
+xml2po compile --mjml template.mjml --po translations.po
 ```
 
 ## What Gets Extracted
@@ -105,14 +105,14 @@ msgstr ""
 
 1. **Extract strings for translation**:
    ```bash
-   mjml2po extract welcome.mjml reset.mjml --output messages.po
+   xml2po extract welcome.mjml reset.mjml --output messages.po
    ```
 
 2. **Translate the PO file** (manually or with translation tools like Poedit, Lokalise, etc.)
 
 3. **Compile translated PO back to MJML**:
    ```bash
-   mjml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml
+   xml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml
    ```
 
 ## Output Format
@@ -152,7 +152,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 >>>
 >>> readd verbose logging option
-# mjml2po
+# xml2po
 
 A Rust utility to extract translatable strings from MJML email templates and generate PO (Portable Object) files for localization.
 
@@ -172,14 +172,14 @@ A Rust utility to extract translatable strings from MJML email templates and gen
 ## Installation
 
 ```bash
-cargo install mjml2po
+cargo install xml2po
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/your-username/mjml2po.git
-cd mjml2po
+git clone https://github.com/your-username/xml2po.git
+cd xml2po
 cargo build --release
 ```
 
@@ -188,35 +188,35 @@ cargo build --release
 ### Extract command - Generate PO files from MJML:
 ```bash
 # Single file processing
-mjml2po extract template.mjml
+xml2po extract template.mjml
 # Creates template.po
 
 # Multiple files with auto-generated output
-mjml2po extract template1.mjml template2.mjml
+xml2po extract template1.mjml template2.mjml
 # Creates template1.po (or template2.po)
 
 # Multiple files with specific output
-mjml2po extract template1.mjml template2.mjml translations.po
+xml2po extract template1.mjml template2.mjml translations.po
 # Creates translations.po
 
 # Process all MJML files in a directory with verbose output
-mjml2po extract emails/*.mjml translations.po --verbose
+xml2po extract emails/*.mjml translations.po --verbose
 # Creates translations.po with detailed logging
 
 # Process with verbose output
-mjml2po extract template.mjml --verbose
+xml2po extract template.mjml --verbose
 ```
 
 ### Compile command - Apply translations to MJML:
 ```bash
 # Compile PO file back into MJML with translated content
-mjml2po compile --mjml template.mjml --po translations.po --output translated.mjml
+xml2po compile --mjml template.mjml --po translations.po --output translated.mjml
 
 # Output to stdout with verbose logging
-mjml2po compile --mjml template.mjml --po translations.po --verbose
+xml2po compile --mjml template.mjml --po translations.po --verbose
 
 # Save to file with verbose output
-mjml2po compile --mjml template.mjml --po translations.po --output translated.mjml --verbose
+xml2po compile --mjml template.mjml --po translations.po --output translated.mjml --verbose
 ```
 
 ## What Gets Extracted
@@ -267,14 +267,14 @@ msgstr ""
 
 1. **Extract strings for translation**:
    ```bash
-   mjml2po extract welcome.mjml reset.mjml --output messages.po --verbose
+   xml2po extract welcome.mjml reset.mjml --output messages.po --verbose
    ```
 
 2. **Translate the PO file** (manually or with translation tools like Poedit, Lokalise, etc.)
 
 3. **Compile translated PO back to MJML**:
    ```bash
-   mjml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml --verbose
+   xml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml --verbose
    ```
 
 ## Output Format

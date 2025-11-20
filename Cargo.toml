@@ -1,7 +1,8 @@
 [package]
-name = "mjml2po"
+name = "xml2po"
 version = "0.1.0"
 edition = "2024"
+description = "Generic XML/HTML to PO file converter with format-specific strategies"
 
 [dependencies]
 quick-xml = { version = "0.30", features = ["encoding", "serialize"] }
@@ -12,4 +13,7 @@ clap = { version = "4.0", features = ["derive"] }
 regex = "1.12.2"
 rspolib = "0.1.1"
 [features]
-default = ["quick-xml/encoding", "quick-xml/serialize"]
+default = ["mjml"]
+mjml = []
+html = []
+all = ["mjml", "html"]
