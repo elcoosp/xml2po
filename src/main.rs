@@ -14,6 +14,10 @@ use std::io::{BufReader, Read, Write};
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
+
+    /// Enable verbose output
+    #[clap(short, long, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -49,12 +53,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Extract { input, output } => extract_command(input, output.as_deref()),
-        Commands::Compile { mjml, po, output } => compile_command(mjml, po, output.as_deref()),
+        Commands::Extract { input, output } => {
+            extract_command(input, output.as_deref(), cli.verbose)
+        }
+        Commands::Compile { mjml, po, output } => {
+            compile_command(mjml, po, output.as_deref(), cli.verbose)
+        }
     }
 }
 
-fn extract_command(input_files: &[String], output_file: Option<&str>) -> Result<()> {
+fn extract_command(input_files: &[String], output_file: Option<&str>, verbose: bool) -> Result<()> {
     if input_files.is_empty() {
         eprintln!("At least one input file is required");
         std::process::exit(1);
@@ -68,32 +76,65 @@ fn extract_command(input_files: &[String], output_file: Option<&str>) -> Result<
         }
     };
 
+    if verbose {
+        println!("Processing {} MJML files...", input_files.len());
+    }
+
     let mut messages: HashMap<String, Vec<String>> = HashMap::new();
 
     for input_path in input_files {
-        extract_messages_from_file(input_path, &mut messages)?;
+        if verbose {
+            println!("  Extracting from: {}", input_path);
+        }
+        extract_messages_from_file(input_path, &mut messages, verbose)?;
     }
 
-    write_po_file(&messages, &output_path)?;
+    if verbose {
+        println!("Writing PO file with {} unique strings...", messages.len());
+    }
 
-    println!("PO file created: {}", output_path);
+    write_po_file(&messages, &output_path, verbose)?;
+
+    if verbose {
+        println!("✅ PO file created: {}", output_path);
+    } else {
+        println!("PO file created: {}", output_path);
+    }
+
     Ok(())
 }
 
-fn compile_command(mjml_file: &str, po_file: &str, output_file: Option<&str>) -> Result<()> {
+fn compile_command(
+    mjml_file: &str,
+    po_file: &str,
+    output_file: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
+    if verbose {
+        println!("Loading translations from: {}", po_file);
+    }
+
     // Load translations from PO file using rspolib
     let po = pofile(po_file).with_context(|| format!("Failed to read PO file: {}", po_file))?;
 
     // Convert PO entries to translation map
     let mut translations = HashMap::new();
+    let mut translation_count = 0;
+
     for entry in &po.entries {
         if !entry.msgid.is_empty() {
             if let Some(msgstr) = &entry.msgstr {
                 if !msgstr.trim().is_empty() {
                     translations.insert(entry.msgid.clone(), msgstr.clone());
+                    translation_count += 1;
                 }
             }
         }
+    }
+
+    if verbose {
+        println!("Loaded {} translations from PO file", translation_count);
+        println!("Reading MJML file: {}", mjml_file);
     }
 
     // Read MJML file
@@ -102,8 +143,12 @@ fn compile_command(mjml_file: &str, po_file: &str, output_file: Option<&str>) ->
         .with_context(|| format!("Failed to open MJML file: {}", mjml_file))?;
     file.read_to_string(&mut mjml_content)?;
 
+    if verbose {
+        println!("Applying translations...");
+    }
+
     // Apply translations
-    let translated_mjml = apply_translations(&mjml_content, &translations)?;
+    let translated_mjml = apply_translations(&mjml_content, &translations, verbose)?;
 
     // Write output
     match output_file {
@@ -111,7 +156,11 @@ fn compile_command(mjml_file: &str, po_file: &str, output_file: Option<&str>) ->
             let mut output = File::create(path)
                 .with_context(|| format!("Failed to create output file: {}", path))?;
             write!(output, "{}", translated_mjml)?;
-            println!("Translated MJML file created: {}", path);
+            if verbose {
+                println!("✅ Translated MJML file created: {}", path);
+            } else {
+                println!("Translated MJML file created: {}", path);
+            }
         }
         None => {
             print!("{}", translated_mjml);
@@ -124,6 +173,7 @@ fn compile_command(mjml_file: &str, po_file: &str, output_file: Option<&str>) ->
 fn extract_messages_from_file(
     file_path: &str,
     messages: &mut HashMap<String, Vec<String>>,
+    verbose: bool,
 ) -> Result<()> {
     let file =
         File::open(file_path).with_context(|| format!("Failed to open file: {}", file_path))?;
@@ -131,6 +181,7 @@ fn extract_messages_from_file(
 
     let mut buf = Vec::new();
     let mut current_element = String::new();
+    let mut extracted_count = 0;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -154,6 +205,7 @@ fn extract_messages_from_file(
                         .entry(trimmed_text.to_string())
                         .or_insert_with(Vec::new)
                         .push(reference);
+                    extracted_count += 1;
                 }
             }
             Ok(Event::CData(e)) => {
@@ -172,6 +224,7 @@ fn extract_messages_from_file(
                         .entry(trimmed_text.to_string())
                         .or_insert_with(Vec::new)
                         .push(reference);
+                    extracted_count += 1;
                 }
             }
             Ok(Event::Eof) => break,
@@ -179,6 +232,10 @@ fn extract_messages_from_file(
             _ => (),
         }
         buf.clear();
+    }
+
+    if verbose && extracted_count > 0 {
+        println!("    Extracted {} strings", extracted_count);
     }
 
     Ok(())
@@ -210,7 +267,15 @@ fn is_translatable_text(text: &str) -> bool {
     true
 }
 
-fn write_po_file(messages: &HashMap<String, Vec<String>>, output_path: &str) -> Result<()> {
+fn write_po_file(
+    messages: &HashMap<String, Vec<String>>,
+    output_path: &str,
+    verbose: bool,
+) -> Result<()> {
+    if verbose {
+        println!("  Creating PO file with {} entries...", messages.len());
+    }
+
     // Create options for new PO file
     let opts = FileOptions {
         path_or_content: "".into(),
@@ -270,6 +335,7 @@ fn write_po_file(messages: &HashMap<String, Vec<String>>, output_path: &str) -> 
 fn apply_translations(
     mjml_content: &str,
     translations: &HashMap<String, String>,
+    verbose: bool,
 ) -> Result<String> {
     let mut reader = Reader::from_str(mjml_content);
 
@@ -280,6 +346,7 @@ fn apply_translations(
     let mut text_buffer = String::new();
     let mut inside_text_content = false;
     let mut element_stack = Vec::new();
+    let mut applied_translations = 0;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -320,6 +387,7 @@ fn apply_translations(
                                         &translated_with_padding,
                                     ),
                                 ))?;
+                                applied_translations += 1;
                             } else {
                                 // Write original text
                                 writer.write_event(&Event::Text(
@@ -367,6 +435,10 @@ fn apply_translations(
             Err(e) => return Err(e.into()),
         }
         buf.clear();
+    }
+
+    if verbose && applied_translations > 0 {
+        println!("  Applied {} translations", applied_translations);
     }
 
     let result = writer.into_inner();
