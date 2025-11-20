@@ -1,0 +1,46 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-11-20 18:36+0000\n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+
+#: examples/template.mjml:55
+msgid "Password Reset Request"
+msgstr "Demande de réinitialisation de mot de passe"
+
+#: examples/template.mjml:743
+msgid "The Loco Team"
+msgstr "La team loco"
+
+#: examples/template.mjml:1212
+msgid "Hey {{name}},"
+msgstr ""
+
+#: examples/template.mjml:1385
+msgid "Forgot your password? No worries! You can reset it by clicking the button below:"
+msgstr ""
+
+#: examples/template.mjml:1577
+msgid "Reset Your Password"
+msgstr ""
+
+#: examples/template.mjml:1772
+msgid "If you didn't request a password reset, please ignore this email."
+msgstr ""
+
+#: examples/template.mjml:2090
+msgid "Best regards,"
+msgstr ""
+
+#: examples/template.mjml:2342
+msgid "If you're having trouble with the button above, copy and paste this URL into your browser:"
+msgstr ""

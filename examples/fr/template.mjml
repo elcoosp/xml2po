@@ -1,0 +1,61 @@
+<mjml>
+  <mj-head>
+    <mj-title>Demande de réinitialisation de mot de passe</mj-title>
+    <mj-font name="Inter" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" />
+    <mj-attributes>
+      <mj-all font-family="Inter, Helvetica, Arial, sans-serif" />
+      <mj-text font-size="16px" color="#4B5563" line-height="24px" />
+      <mj-button background="#2563EB" color="#FFFFFF" font-size="16px" font-weight="600" border-radius="8px" />
+    </mj-attributes>
+  </mj-head>
+
+  <mj-body background-color="#F9FAFB">
+    <!-- Header Section -->
+    <mj-section padding="40px 0 20px">
+      <mj-column>
+        <mj-text align="center" color="#111827" font-size="28px" font-weight="600" padding="0 0 10px">
+          La team loco
+        </mj-text>
+        <mj-divider border-color="#E5E7EB" border-width="1px" padding="0 0 20px" />
+      </mj-column>
+    </mj-section>
+
+    <!-- Main Content -->
+    <mj-section padding="20px 0">
+      <mj-column background-color="#FFFFFF" border-radius="12px" padding="40px 30px" box-shadow="0 1px 3px 0 rgba(0, 0, 0, 0.1)">
+        <!-- Greeting -->
+        <mj-text color="#111827" font-size="20px" font-weight="600" padding="0 0 16px">
+          Hey {{name}},
+        </mj-text>
+
+        <!-- Message -->
+        <mj-text padding="0 0 24px">
+          Forgot your password? No worries! You can reset it by clicking the button below:
+        </mj-text>
+
+        <!-- Reset Button -->
+        <mj-button href="http://{{domain}}/reset#{{resetToken}}" padding="16px 32px" inner-padding="12px 24px">
+          Reset Your Password
+        </mj-button>
+
+        <!-- Help Text -->
+        <mj-text color="#6B7280" font-size="14px" padding="24px 0 0">
+          If you didn't request a password reset, please ignore this email.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <!-- Footer -->
+    <mj-section padding="30px 0 40px">
+      <mj-column>
+        <mj-divider border-color="#E5E7EB" border-width="1px" padding="0 0 20px" />
+        <mj-text align="center" color="#9CA3AF" font-size="14px" line-height="20px"><br /><strong>The Loco Team</strong>
+        </mj-text>
+        <mj-text align="center" color="#9CA3AF" font-size="12px" padding="20px 0 0"><br />
+          If you're having trouble with the button above, copy and paste this URL into your browser:
+          http://{{domain}}/reset#{{resetToken}}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
