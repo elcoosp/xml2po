@@ -10,5 +10,6 @@ chrono = { version = "0.4", features = ["clock"] }
 
 clap = { version = "4.0", features = ["derive"] }
 regex = "1.12.2"
+rspolib = "0.1.1"
 [features]
 default = ["quick-xml/encoding", "quick-xml/serialize"]

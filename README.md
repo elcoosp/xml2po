@@ -5,13 +5,14 @@ A Rust utility to extract translatable strings from MJML email templates and gen
 ## Features
 
 - 📧 Extracts text from MJML email templates
-- 🌍 Generates standard PO files for translation workflows
+- 🌍 Generates standard PO files for translation workflows using `rspolib`
 - 📂 Processes multiple MJML files into a single PO file
 - 🎯 Focuses on user-visible content only (`mj-title`, `mj-text`, `mj-button`)
 - 🚫 Automatically excludes URLs, email addresses, and other non-translatable content
 - 📍 Preserves source file references with line numbers
 - 📋 Merges duplicate strings across multiple files
 - 📝 Preserves placeholder variables like `{{name}}` and `{{resetToken}}`
+- 🔁 Compile command to apply translations back to MJML templates
 
 ## Installation
 
@@ -29,27 +30,31 @@ cargo build --release
 
 ## Usage
 
-### Single file processing:
+### Extract command - Generate PO files from MJML:
 ```bash
-mjml2po template.mjml
+# Single file processing
+mjml2po extract template.mjml
 # Creates template.po
-```
 
-### Multiple files with auto-generated output:
-```bash
-mjml2po template1.mjml template2.mjml
+# Multiple files with auto-generated output
+mjml2po extract template1.mjml template2.mjml
 # Creates template1.po (or template2.po)
-```
 
-### Multiple files with specific output:
-```bash
-mjml2po template1.mjml template2.mjml translations.po
+# Multiple files with specific output
+mjml2po extract template1.mjml template2.mjml translations.po
 # Creates translations.po
+
+# Process all MJML files in a directory
+mjml2po extract emails/*.mjml translations.po
 ```
 
-### Process all MJML files in a directory:
+### Compile command - Apply translations to MJML:
 ```bash
-mjml2po emails/*.mjml translations.po
+# Compile PO file back into MJML with translated content
+mjml2po compile --mjml template.mjml --po translations.po --output translated.mjml
+
+# Output to stdout
+mjml2po compile --mjml template.mjml --po translations.po
 ```
 
 ## What Gets Extracted
@@ -96,15 +101,29 @@ msgstr ""
 - Non-user-visible elements
 - Whitespace-only content
 
+## Workflow Example
+
+1. **Extract strings for translation**:
+   ```bash
+   mjml2po extract welcome.mjml reset.mjml --output messages.po
+   ```
+
+2. **Translate the PO file** (manually or with translation tools like Poedit, Lokalise, etc.)
+
+3. **Compile translated PO back to MJML**:
+   ```bash
+   mjml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml
+   ```
+
 ## Output Format
 
 The generated PO files follow the standard format with:
 
 - Proper headers with creation timestamp
 - File and line number references (`#: filename:line`)
-- Escaped special characters
 - Sorted by order of appearance
 - Merged duplicate strings with combined references
+- Compatible with all standard PO file tools
 
 ## Requirements
 
@@ -126,5 +145,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - Built with [quick-xml](https://crates.io/crates/quick-xml) for fast XML parsing
+- Uses [rspolib](https://crates.io/crates/rspolib) for robust PO file handling
 - Uses [anyhow](https://crates.io/crates/anyhow) for error handling
+- Uses [clap](https://crates.io/crates/clap) for command-line argument parsing
 - Inspired by localization tools in the i18n ecosystem
