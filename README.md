@@ -1,321 +1,177 @@
 # xml2po
 
-A Rust utility to extract translatable strings from MJML email templates and generate PO (Portable Object) files for localization.
+A Rust library and CLI tool for extracting translatable strings from XML/HTML files (including MJML) into PO (Portable Object) files and compiling translated PO files back into the original format.
 
 ## Features
 
-- 📧 Extracts text from MJML email templates
-- 🌍 Generates standard PO files for translation workflows using `rspolib`
-- 📂 Processes multiple MJML files into a single PO file
-- 🎯 Focuses on user-visible content only (`mj-title`, `mj-text`, `mj-button`)
-- 🚫 Automatically excludes URLs, email addresses, and other non-translatable content
-- 📍 Preserves source file references with line numbers
-- 📋 Merges duplicate strings across multiple files
-- 📝 Preserves placeholder variables like `{{name}}` and `{{resetToken}}`
-- 🔁 Compile command to apply translations back to MJML templates
+- **Multiple Format Support**: Extract and compile translations for MJML and HTML files
+- **Smart Text Detection**: Automatically filters out non-translatable content (URLs, emails, etc.)
+- **PO File Integration**: Uses standard PO file format for translation workflows
+- **Whitespace Preservation**: Maintains original formatting when applying translations
+- **WASM Support**: Can be compiled to WebAssembly for browser usage
+- **Flexible CLI**: Easy-to-use command-line interface for batch processing
 
 ## Installation
+
+### CLI Tool
 
 ```bash
 cargo install xml2po
 ```
 
-Or build from source:
+### Library
 
-```bash
-git clone https://github.com/your-username/xml2po.git
-cd xml2po
-cargo build --release
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+xml2po = "0.1.0"
+
+# Enable specific formats you need
+features = ["mjml", "html", "wasm-bindgen"]
 ```
+
+## Supported Formats
+
+- **MJML** (enable with `mjml` feature)
+- **HTML** (enable with `html` feature)
 
 ## Usage
 
-### Extract command - Generate PO files from MJML:
+### CLI
+
+#### Extract translatable strings to PO file
+
 ```bash
-# Single file processing
-xml2po extract template.mjml
-# Creates template.po
+# Extract from MJML files
+xml2po extract --format mjml input1.mjml input2.mjml --output translations.po
 
-# Multiple files with auto-generated output
-xml2po extract template1.mjml template2.mjml
-# Creates template1.po (or template2.po)
+# Extract from HTML files  
+xml2po extract --format html *.html
 
-# Multiple files with specific output
-xml2po extract template1.mjml template2.mjml translations.po
-# Creates translations.po
-
-# Process all MJML files in a directory
-xml2po extract emails/*.mjml translations.po
+# With verbose output
+xml2po extract -v --format mjml template.mjml
 ```
 
-### Compile command - Apply translations to MJML:
+#### Compile translations back to source format
+
 ```bash
-# Compile PO file back into MJML with translated content
-xml2po compile --mjml template.mjml --po translations.po --output translated.mjml
+# Compile MJML with translations
+xml2po compile --input template.mjml --po translations.po --output translated.mjml
 
-# Output to stdout
-xml2po compile --mjml template.mjml --po translations.po
+# Compile HTML and output to stdout
+xml2po compile --input page.html --po translations.po --format html
 ```
 
-## What Gets Extracted
+### Library
 
-The tool extracts text from these MJML elements:
+#### Extract messages from content
 
-- `<mj-title>` - Email subject lines
-- `<mj-text>` - Body text content
-- `<mj-button>` - Button text labels
+```rust
+use xml2po::{extract_messages, get_strategy};
 
-### Example MJML:
-```xml
-<mjml>
-  <mj-head>
-    <mj-title>Welcome to Our Service</mj-title>
-  </mj-head>
-  <mj-body>
-    <mj-text>Hello {{name}},</mj-text>
-    <mj-button href="https://example.com">Click Here</mj-button>
-  </mj-body>
-</mjml>
+let content = r#"<mjml><mj-text>Hello World</mj-text></mjml>"#;
+let strategy = get_strategy("mjml")?;
+let messages = extract_messages(content, "template.mjml", strategy.as_ref())?;
+
+for message in messages {
+    println!("Found: {} at {:?}", message.msgid, message.references);
+}
 ```
 
-### Generated PO entry:
-```po
-#: template.mjml:3
-msgid "Welcome to Our Service"
-msgstr ""
+#### Apply translations
 
-#: template.mjml:6
-msgid "Hello {{name}},"
-msgstr ""
+```rust
+use xml2po::{apply_translations, parse_po_to_translations, get_strategy};
+use std::collections::HashMap;
 
-#: template.mjml:7
-msgid "Click Here"
-msgstr ""
+let content = "<p>Hello World</p>";
+let po_content = r#"
+msgid "Hello World"
+msgstr "Hola Mundo"
+"#;
+
+let strategy = get_strategy("html")?;
+let translations = parse_po_to_translations(po_content)?;
+let translated = apply_translations(content, &translations, strategy.as_ref())?;
+
+println!("{}", translated); // <p>Hola Mundo</p>
 ```
 
-## What Gets Excluded
+#### Generate PO file content
 
-- URLs (http://, https://, etc.)
-- Email addresses
-- Attribute values (href, src, etc.)
-- Non-user-visible elements
-- Whitespace-only content
+```rust
+use xml2po::{extract_messages, messages_to_po, get_strategy};
 
-## Workflow Example
+let content = "<h1>Welcome</h1><p>Hello World</p>";
+let strategy = get_strategy("html")?;
+let messages = extract_messages(content, "page.html", strategy.as_ref())?;
+let po_content = messages_to_po(&messages);
 
-1. **Extract strings for translation**:
-   ```bash
-   xml2po extract welcome.mjml reset.mjml --output messages.po
-   ```
+println!("{}", po_content);
+```
 
-2. **Translate the PO file** (manually or with translation tools like Poedit, Lokalise, etc.)
+### WebAssembly
 
-3. **Compile translated PO back to MJML**:
-   ```bash
-   xml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml
-   ```
+The library can be compiled to WebAssembly for use in web applications:
 
-## Output Format
+```javascript
+// Extract messages to PO format
+const poContent = await extractToPo(mjmlContent, "mjml", "template.mjml");
 
-The generated PO files follow the standard format with:
+// Compile with translations
+const translated = await compileWithPo(htmlContent, poContent, "html");
+```
 
-- Proper headers with creation timestamp
-- File and line number references (`#: filename:line`)
-- Sorted by order of appearance
-- Merged duplicate strings with combined references
-- Compatible with all standard PO file tools
+## Translatable Elements
 
-## Requirements
+### MJML
+- `mj-title`
+- `mj-text` 
+- `mj-button`
 
-- Rust 1.60 or later
-- MJML files must be valid XML
+### HTML
+- `p`, `h1`-`h6`, `span`, `div`, `a`, `button`, `label`
+- `li`, `td`, `th`, `title`, `option`
+- `strong`, `em`, `b`, `i`
 
-## Contributing
+## Text Filtering
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [quick-xml](https://crates.io/crates/quick-xml) for fast XML parsing
-- Uses [rspolib](https://crates.io/crates/rspolib) for robust PO file handling
-- Uses [anyhow](https://crates.io/crates/anyhow) for error handling
-- Uses [clap](https://crates.io/crates/clap) for command-line argument parsing
-- Inspired by localization tools in the i18n ecosystem
-
->>>
->>> readd verbose logging option
-# xml2po
-
-A Rust utility to extract translatable strings from MJML email templates and generate PO (Portable Object) files for localization.
+The tool automatically excludes:
+- URLs (`http://`, `https://`, etc.)
+- Email addresses (unless they contain placeholders)
+- Pure whitespace
+- Text without alphabetic characters
+- File paths and protocol-based strings
 
 ## Features
 
-- 📧 Extracts text from MJML email templates
-- 🌍 Generates standard PO files for translation workflows using `rspolib`
-- 📂 Processes multiple MJML files into a single PO file
-- 🎯 Focuses on user-visible content only (`mj-title`, `mj-text`, `mj-button`)
-- 🚫 Automatically excludes URLs, email addresses, and other non-translatable content
-- 📍 Preserves source file references with line numbers
-- 📋 Merges duplicate strings across multiple files
-- 📝 Preserves placeholder variables like `{{name}}` and `{{resetToken}}`
-- 🔁 Compile command to apply translations back to MJML templates
-- 📋 Verbose logging option for detailed output
+- **mjml**: Enable MJML format support
+- **html**: Enable HTML format support  
+- **wasm-bindgen**: Enable WebAssembly compilation
+- **chrono**: Enable timestamps in PO file headers (enabled by default)
+- **rspolib**: Use rspolib for PO file handling in CLI
 
-## Installation
+## Project Structure
 
-```bash
-cargo install xml2po
-```
+- `lib.rs`: Core library functionality with extraction strategies
+- `main.rs`: CLI application using the library
+- WASM bindings for browser usage
+- Comprehensive test suite
 
-Or build from source:
+## Development
 
 ```bash
-git clone https://github.com/your-username/xml2po.git
-cd xml2po
-cargo build --release
+# Run tests
+cargo test
+
+# Build with specific features
+cargo build --features mjml,html
+
+# Test WASM build
+cargo build --target wasm32-unknown-unknown --features wasm-bindgen
 ```
-
-## Usage
-
-### Extract command - Generate PO files from MJML:
-```bash
-# Single file processing
-xml2po extract template.mjml
-# Creates template.po
-
-# Multiple files with auto-generated output
-xml2po extract template1.mjml template2.mjml
-# Creates template1.po (or template2.po)
-
-# Multiple files with specific output
-xml2po extract template1.mjml template2.mjml translations.po
-# Creates translations.po
-
-# Process all MJML files in a directory with verbose output
-xml2po extract emails/*.mjml translations.po --verbose
-# Creates translations.po with detailed logging
-
-# Process with verbose output
-xml2po extract template.mjml --verbose
-```
-
-### Compile command - Apply translations to MJML:
-```bash
-# Compile PO file back into MJML with translated content
-xml2po compile --mjml template.mjml --po translations.po --output translated.mjml
-
-# Output to stdout with verbose logging
-xml2po compile --mjml template.mjml --po translations.po --verbose
-
-# Save to file with verbose output
-xml2po compile --mjml template.mjml --po translations.po --output translated.mjml --verbose
-```
-
-## What Gets Extracted
-
-The tool extracts text from these MJML elements:
-
-- `<mj-title>` - Email subject lines
-- `<mj-text>` - Body text content
-- `<mj-button>` - Button text labels
-
-### Example MJML:
-```xml
-<mjml>
-  <mj-head>
-    <mj-title>Welcome to Our Service</mj-title>
-  </mj-head>
-  <mj-body>
-    <mj-text>Hello {{name}},</mj-text>
-    <mj-button href="https://example.com">Click Here</mj-button>
-  </mj-body>
-</mjml>
-```
-
-### Generated PO entry:
-```po
-#: template.mjml:3
-msgid "Welcome to Our Service"
-msgstr ""
-
-#: template.mjml:6
-msgid "Hello {{name}},"
-msgstr ""
-
-#: template.mjml:7
-msgid "Click Here"
-msgstr ""
-```
-
-## What Gets Excluded
-
-- URLs (http://, https://, etc.)
-- Email addresses
-- Attribute values (href, src, etc.)
-- Non-user-visible elements
-- Whitespace-only content
-
-## Workflow Example
-
-1. **Extract strings for translation**:
-   ```bash
-   xml2po extract welcome.mjml reset.mjml --output messages.po --verbose
-   ```
-
-2. **Translate the PO file** (manually or with translation tools like Poedit, Lokalise, etc.)
-
-3. **Compile translated PO back to MJML**:
-   ```bash
-   xml2po compile --mjml welcome.mjml --po messages.po --output welcome_es.mjml --verbose
-   ```
-
-## Output Format
-
-The generated PO files follow the standard format with:
-
-- Proper headers with creation timestamp
-- File and line number references (`#: filename:line`)
-- Sorted by order of appearance
-- Merged duplicate strings with combined references
-- Compatible with all standard PO file tools
-
-## Verbose Mode
-
-When using the `--verbose` flag, you'll get detailed output including:
-- Files being processed
-- Number of strings extracted
-- Processing status updates
-- Error details if any occur
-
-## Requirements
-
-- Rust 1.60 or later
-- MJML files must be valid XML
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [quick-xml](https://crates.io/crates/quick-xml) for fast XML parsing
-- Uses [rspolib](https://crates.io/crates/rspolib) for robust PO file handling
-- Uses [anyhow](https://crates.io/crates/anyhow) for error handling
-- Uses [clap](https://crates.io/crates/clap) for command-line argument parsing
-- Inspired by localization tools in the i18n ecosystem
+MIT License
