@@ -13,7 +13,10 @@ clap = { version = "4.0", features = ["derive"] }
 regex = "1.12.2"
 rspolib = "0.1.1"
 [features]
-default = ["mjml"]
+default = ["mjml", "chrono"]
 mjml = []
 html = []
-all = ["mjml", "html"]
+chrono=[]
+wasm32=[]
+rspolib=[]
+all = ["mjml", "html", "chrono", "rspolib"]

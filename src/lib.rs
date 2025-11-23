@@ -1,5 +1,5 @@
 // lib.rs
-use anyhow::{Context, Result};
+use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::{collections::HashMap, path::PathBuf};
@@ -494,7 +494,6 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
     let mut translations = HashMap::new();
     let mut current_msgid: Option<String> = None;
     let mut in_msgid = false;
-    let mut in_msgstr = false;
     let mut current_value = String::new();
 
     for line in po_content.lines() {
@@ -513,14 +512,12 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
             }
 
             in_msgid = true;
-            in_msgstr = false;
             current_value = extract_po_string(&trimmed["msgid ".len()..]);
         } else if trimmed.starts_with("msgstr ") {
             if in_msgid {
                 current_msgid = Some(current_value.clone());
             }
             in_msgid = false;
-            in_msgstr = true;
             current_value = extract_po_string(&trimmed["msgstr ".len()..]);
         } else if trimmed.starts_with("\"") {
             // Continuation line
