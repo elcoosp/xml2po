@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 #[cfg(feature = "rspolib")]
 use rspolib::{FileOptions, POFile, Save, pofile};
@@ -364,8 +364,19 @@ fn restore_text_padding(translation: &str, original: &str) -> String {
 }
 
 /// Convert messages to PO format string
-pub fn messages_to_po(messages: &[Message]) -> String {
+/// Convert messages to PO format string, preserving existing translations
+pub fn messages_to_po(messages: &[Message], existing_po_path: Option<PathBuf>) -> Result<String> {
     let mut output = String::new();
+
+    // Load existing translations if path provided
+    let existing_translations = if let Some(path) = existing_po_path {
+        match std::fs::read_to_string(path) {
+            Ok(content) => parse_po_to_translations(&content).unwrap_or_default(),
+            Err(_) => HashMap::new(),
+        }
+    } else {
+        HashMap::new()
+    };
 
     // Add header
     output.push_str("msgid \"\"\n");
@@ -402,11 +413,80 @@ pub fn messages_to_po(messages: &[Message]) -> String {
 
         // Add msgid
         output.push_str(&format!("msgid \"{}\"\n", escape_po_string(&message.msgid)));
-        output.push_str("msgstr \"\"\n");
+
+        // Add msgstr - preserve existing translation if available
+        if let Some(translation) = existing_translations.get(&message.msgid) {
+            output.push_str(&format!("msgstr \"{}\"\n", escape_po_string(translation)));
+        } else {
+            output.push_str("msgstr \"\"\n");
+        }
         output.push_str("\n");
     }
 
-    output
+    Ok(output)
+}
+
+// Update the WASM binding as well
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn extract_to_po_with_existing(
+    content: &str,
+    format: &str,
+    source_name: &str,
+    existing_po_content: Option<String>,
+) -> Result<String, JsValue> {
+    let strategy = get_strategy(format).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let messages = extract_messages(content, source_name, strategy.as_ref())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    // Parse existing translations if provided
+    let existing_translations = if let Some(po_content) = existing_po_content {
+        parse_po_to_translations(&po_content).map_err(|e| JsValue::from_str(&e.to_string()))?
+    } else {
+        HashMap::new()
+    };
+
+    // Generate PO content with preserved translations
+    let mut output = String::new();
+
+    // Add header
+    output.push_str("msgid \"\"\n");
+    output.push_str("msgstr \"\"\n");
+    output.push_str("\"Project-Id-Version: \\n\"\n");
+    output.push_str("\"Report-Msgid-Bugs-To: \\n\"\n");
+    output.push_str("\"POT-Creation-Date: \\n\"\n");
+    output.push_str("\"PO-Revision-Date: \\n\"\n");
+    output.push_str("\"Last-Translator: \\n\"\n");
+    output.push_str("\"Language-Team: \\n\"\n");
+    output.push_str("\"Language: \\n\"\n");
+    output.push_str("\"MIME-Version: 1.0\\n\"\n");
+    output.push_str("\"Content-Type: text/plain; charset=UTF-8\\n\"\n");
+    output.push_str("\"Content-Transfer-Encoding: 8bit\\n\"\n");
+    output.push_str("\"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"\n");
+    output.push_str("\n");
+
+    // Add messages
+    for message in &messages {
+        output.push_str(&format!("#: {}\n", message.references.join(" ")));
+        output.push_str(&format!("msgid \"{}\"\n", escape_po_string(&message.msgid)));
+
+        if let Some(translation) = existing_translations.get(&message.msgid) {
+            output.push_str(&format!("msgstr \"{}\"\n", escape_po_string(translation)));
+        } else {
+            output.push_str("msgstr \"\"\n");
+        }
+        output.push_str("\n");
+    }
+
+    Ok(output)
+}
+
+// Keep the old function for backward compatibility (non-WASM)
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn extract_to_po(content: &str, format: &str, source_name: &str) -> Result<String, JsValue> {
+    extract_to_po_with_existing(content, format, source_name, None)
 }
 
 /// Parse PO format string to translation map
@@ -797,7 +877,7 @@ mod tests {
             },
         ];
 
-        let po_content = messages_to_po(&messages);
+        let po_content = messages_to_po(&messages, None).unwrap();
 
         // Verify PO content contains expected strings
         assert!(po_content.contains("Hello World"));
