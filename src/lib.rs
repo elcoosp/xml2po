@@ -195,7 +195,7 @@ pub fn extract_messages(
                     let reference = format!("{}:{}", source_name, line);
                     messages
                         .entry(trimmed_text.to_string())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(reference);
                 }
             }
@@ -211,7 +211,7 @@ pub fn extract_messages(
                     let reference = format!("{}:{}", source_name, line);
                     messages
                         .entry(trimmed_text.to_string())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(reference);
                 }
             }
@@ -232,13 +232,13 @@ pub fn extract_messages(
         let a_line = a
             .references
             .first()
-            .and_then(|r| r.split(':').last())
+            .and_then(|r| r.split(':').next_back())
             .and_then(|line| line.parse::<usize>().ok())
             .unwrap_or(0);
         let b_line = b
             .references
             .first()
-            .and_then(|r| r.split(':').last())
+            .and_then(|r| r.split(':').next_back())
             .and_then(|line| line.parse::<usize>().ok())
             .unwrap_or(0);
         a_line.cmp(&b_line)
@@ -268,7 +268,7 @@ pub fn apply_translations(
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 element_stack.push(name.clone());
                 current_element = name;
-                writer.write_event(&Event::Start(e.clone()))?;
+                writer.write_event(Event::Start(e.clone()))?;
 
                 if strategy.is_translatable_element(&current_element) {
                     inside_text_content = true;
@@ -281,7 +281,7 @@ pub fn apply_translations(
                 if inside_text_content {
                     text_buffer.push_str(&e.unescape()?);
                 } else {
-                    writer.write_event(&Event::Text(e))?;
+                    writer.write_event(Event::Text(e))?;
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -293,30 +293,30 @@ pub fn apply_translations(
                             if let Some(translation) = translations.get(trimmed_text) {
                                 let translated_with_padding =
                                     restore_text_padding(translation, &text_buffer);
-                                writer.write_event(&Event::Text(
+                                writer.write_event(Event::Text(
                                     quick_xml::events::BytesText::from_escaped(
                                         &translated_with_padding,
                                     ),
                                 ))?;
                             } else {
-                                writer.write_event(&Event::Text(
+                                writer.write_event(Event::Text(
                                     quick_xml::events::BytesText::from_escaped(&text_buffer),
                                 ))?;
                             }
                         } else {
-                            writer.write_event(&Event::Text(
+                            writer.write_event(Event::Text(
                                 quick_xml::events::BytesText::from_escaped(&text_buffer),
                             ))?;
                         }
                     } else {
-                        writer.write_event(&Event::Text(
+                        writer.write_event(Event::Text(
                             quick_xml::events::BytesText::from_escaped(&text_buffer),
                         ))?;
                     }
                     inside_text_content = false;
                     text_buffer.clear();
                 }
-                writer.write_event(&Event::End(e.clone()))?;
+                writer.write_event(Event::End(e.clone()))?;
 
                 if !element_stack.is_empty() {
                     element_stack.pop();
@@ -332,7 +332,7 @@ pub fn apply_translations(
                     text_buffer
                         .push_str(&String::from_utf8(e.into_inner().to_vec()).unwrap_or_default());
                 } else {
-                    writer.write_event(&Event::CData(e))?;
+                    writer.write_event(Event::CData(e))?;
                 }
             }
             Ok(Event::Eof) => break,
@@ -404,7 +404,7 @@ pub fn messages_to_po(messages: &[Message], existing_po_path: Option<PathBuf>) -
     output.push_str("\"Content-Type: text/plain; charset=UTF-8\\n\"\n");
     output.push_str("\"Content-Transfer-Encoding: 8bit\\n\"\n");
     output.push_str("\"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"\n");
-    output.push_str("\n");
+    output.push('\n');
 
     // Add messages
     for message in messages {
@@ -420,7 +420,7 @@ pub fn messages_to_po(messages: &[Message], existing_po_path: Option<PathBuf>) -
         } else {
             output.push_str("msgstr \"\"\n");
         }
-        output.push_str("\n");
+        output.push('\n');
     }
 
     Ok(output)
@@ -505,11 +505,10 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
 
         if trimmed.starts_with("msgid ") {
             // Save previous entry if exists
-            if let Some(msgid) = current_msgid.take() {
-                if !msgid.is_empty() && !current_value.trim().is_empty() {
+            if let Some(msgid) = current_msgid.take()
+                && !msgid.is_empty() && !current_value.trim().is_empty() {
                     translations.insert(msgid, current_value.clone());
                 }
-            }
 
             in_msgid = true;
             current_value = extract_po_string(&trimmed["msgid ".len()..]);
@@ -526,11 +525,10 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
     }
 
     // Save last entry
-    if let Some(msgid) = current_msgid {
-        if !msgid.is_empty() && !current_value.trim().is_empty() {
+    if let Some(msgid) = current_msgid
+        && !msgid.is_empty() && !current_value.trim().is_empty() {
             translations.insert(msgid, current_value);
         }
-    }
 
     Ok(translations)
 }
