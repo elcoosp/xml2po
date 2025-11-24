@@ -31,7 +31,10 @@ pub struct MjmlStrategy;
 #[cfg(feature = "mjml")]
 impl ExtractionStrategy for MjmlStrategy {
     fn is_translatable_element(&self, element_name: &str) -> bool {
-        matches!(element_name, "mj-title" | "mj-text" | "mj-button")
+        matches!(
+            element_name,
+            "mj-title" | "mj-text" | "mj-button" | "strong"
+        )
     }
 
     fn is_translatable_text(&self, text: &str) -> bool {
@@ -506,9 +509,11 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
         if trimmed.starts_with("msgid ") {
             // Save previous entry if exists
             if let Some(msgid) = current_msgid.take()
-                && !msgid.is_empty() && !current_value.trim().is_empty() {
-                    translations.insert(msgid, current_value.clone());
-                }
+                && !msgid.is_empty()
+                && !current_value.trim().is_empty()
+            {
+                translations.insert(msgid, current_value.clone());
+            }
 
             in_msgid = true;
             current_value = extract_po_string(&trimmed["msgid ".len()..]);
@@ -526,9 +531,11 @@ pub fn parse_po_to_translations(po_content: &str) -> Result<HashMap<String, Stri
 
     // Save last entry
     if let Some(msgid) = current_msgid
-        && !msgid.is_empty() && !current_value.trim().is_empty() {
-            translations.insert(msgid, current_value);
-        }
+        && !msgid.is_empty()
+        && !current_value.trim().is_empty()
+    {
+        translations.insert(msgid, current_value);
+    }
 
     Ok(translations)
 }
