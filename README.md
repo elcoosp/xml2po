@@ -1,72 +1,73 @@
-# xml2po
+<div align="center">
+  <img src="docs/logo.png" alt="xml2po Logo" width="300"/>
+  <p>
+    <strong>Extract and compile translations for XML, HTML, and MJML</strong><br/>
+    A high-performance Rust library and CLI tool for seamless PO (Portable Object) file integration.
+  </p>
+  <p>
+    <img src="https://img.shields.io/badge/Rust-1.94%20%7C%202024-000000?style=flat-square&logo=rust" alt="Rust"/>
+    <img src="https://img.shields.io/crates/v/xml2po?style=flat-square" alt="Crates.io"/>
+    <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License MIT"/>
+    <img src="https://img.shields.io/badge/Target-Native%20%2B%20WASM-6F4E37?style=flat-square" alt="WASM Support"/>
+  </p>
+</div>
 
-A Rust library and CLI tool for extracting translatable strings from XML/HTML files (including MJML) into PO (Portable Object) files and compiling translated PO files back into the original format.
+---
+
+`xml2po` streamlines the localization workflow by extracting translatable strings from XML, HTML, and MJML files into standard PO files, and compiling translated PO files back into the original format while perfectly preserving whitespace and structure.
 
 ## Features
 
-- **Multiple Format Support**: Extract and compile translations for MJML and HTML files
-- **Smart Text Detection**: Automatically filters out non-translatable content (URLs, emails, etc.)
-- **PO File Integration**: Uses standard PO file format for translation workflows
-- **Whitespace Preservation**: Maintains original formatting when applying translations
-- **WASM Support**: Can be compiled to WebAssembly for browser usage
-- **Flexible CLI**: Easy-to-use command-line interface for batch processing
+- **Multi-Format Support**: Native extraction and compilation for MJML and HTML.
+- **Smart Text Detection**: Automatically filters out non-translatable content (URLs, emails, file paths, pure whitespace).
+- **Standard PO Integration**: Fully compatible with standard PO file workflows and tools (e.g., gettext, Crowdin, Weblate).
+- **Whitespace Preservation**: Maintains original formatting and indentation when applying translations.
+- **WebAssembly Ready**: Compiles to WASM for seamless in-browser localization workflows.
+- **Flexible CLI**: Intuitive command-line interface designed for batch processing and CI/CD pipelines.
 
 ## Installation
 
 ### CLI Tool
-
+Install the binary directly via Cargo:
 ```bash
 cargo install xml2po
 ```
 
 ### Library
-
-Add to your `Cargo.toml`:
-
+Add `xml2po` to your `Cargo.toml`, enabling only the features you need:
 ```toml
 [dependencies]
-xml2po = "0.1.0"
-
-# Enable specific formats you need
-features = ["mjml", "html", "wasm-bindgen"]
+xml2po = { version = "0.1.0", features = ["mjml", "html"] }
 ```
-
-## Supported Formats
-
-- **MJML** (enable with `mjml` feature)
-- **HTML** (enable with `html` feature)
 
 ## Usage
 
-### CLI
+### Command-Line Interface
 
-#### Extract translatable strings to PO file
-
+**Extract translatable strings to a PO file:**
 ```bash
 # Extract from MJML files
 xml2po extract --format mjml input1.mjml input2.mjml --output translations.po
 
-# Extract from HTML files  
+# Extract from multiple HTML files
 xml2po extract --format html *.html
 
-# With verbose output
+# Enable verbose output for debugging
 xml2po extract -v --format mjml template.mjml
 ```
 
-#### Compile translations back to source format
-
+**Compile translations back to the source format:**
 ```bash
-# Compile MJML with translations
+# Compile MJML with translations to a new file
 xml2po compile --input template.mjml --po translations.po --output translated.mjml
 
-# Compile HTML and output to stdout
+# Compile HTML and output directly to stdout
 xml2po compile --input page.html --po translations.po --format html
 ```
 
-### Library
+### Rust Library
 
-#### Extract messages from content
-
+**Extract messages from content:**
 ```rust
 use xml2po::{extract_messages, get_strategy};
 
@@ -79,11 +80,9 @@ for message in messages {
 }
 ```
 
-#### Apply translations
-
+**Apply translations to content:**
 ```rust
 use xml2po::{apply_translations, parse_po_to_translations, get_strategy};
-use std::collections::HashMap;
 
 let content = "<p>Hello World</p>";
 let po_content = r#"
@@ -95,83 +94,61 @@ let strategy = get_strategy("html")?;
 let translations = parse_po_to_translations(po_content)?;
 let translated = apply_translations(content, &translations, strategy.as_ref())?;
 
-println!("{}", translated); // <p>Hola Mundo</p>
+assert_eq!(translated, "<p>Hola Mundo</p>");
 ```
 
-#### Generate PO file content
+> [!TIP]
+> **WebAssembly Usage**  
+> The library can be compiled to WebAssembly (`wasm32-unknown-unknown`) for direct use in web applications via `wasm-bindgen`, enabling client-side extraction and compilation.
+> ```javascript
+> const poContent = await extractToPo(mjmlContent, "mjml", "template.mjml");
+> const translated = await compileWithPo(htmlContent, poContent, "html");
+> ```
 
-```rust
-use xml2po::{extract_messages, messages_to_po, get_strategy};
+## Supported Formats & Elements
 
-let content = "<h1>Welcome</h1><p>Hello World</p>";
-let strategy = get_strategy("html")?;
-let messages = extract_messages(content, "page.html", strategy.as_ref())?;
-let po_content = messages_to_po(&messages);
+`xml2po` targets specific, semantically translatable elements to avoid breaking markup or extracting boilerplate.
 
-println!("{}", po_content);
-```
+| Format | Translatable Elements |
+| :--- | :--- |
+| **MJML** | `mj-title`, `mj-text`, `mj-button` |
+| **HTML** | `p`, `h1`–`h6`, `span`, `div`, `a`, `button`, `label`, `li`, `td`, `th`, `title`, `option`, `strong`, `em`, `b`, `i` |
 
-### WebAssembly
+> [!NOTE]
+> **Smart Filtering**  
+> The extraction engine automatically excludes:
+> - URLs (`http://`, `https://`, etc.)
+> - Email addresses (unless they contain translation placeholders)
+> - Pure whitespace or text without alphabetic characters
+> - File paths and protocol-based strings
 
-The library can be compiled to WebAssembly for use in web applications:
+## Cargo Features
 
-```javascript
-// Extract messages to PO format
-const poContent = await extractToPo(mjmlContent, "mjml", "template.mjml");
-
-// Compile with translations
-const translated = await compileWithPo(htmlContent, poContent, "html");
-```
-
-## Translatable Elements
-
-### MJML
-- `mj-title`
-- `mj-text` 
-- `mj-button`
-
-### HTML
-- `p`, `h1`-`h6`, `span`, `div`, `a`, `button`, `label`
-- `li`, `td`, `th`, `title`, `option`
-- `strong`, `em`, `b`, `i`
-
-## Text Filtering
-
-The tool automatically excludes:
-- URLs (`http://`, `https://`, etc.)
-- Email addresses (unless they contain placeholders)
-- Pure whitespace
-- Text without alphabetic characters
-- File paths and protocol-based strings
-
-## Features
-
-- **mjml**: Enable MJML format support
-- **html**: Enable HTML format support  
-- **wasm-bindgen**: Enable WebAssembly compilation
-- **chrono**: Enable timestamps in PO file headers (enabled by default)
-- **rspolib**: Use rspolib for PO file handling in CLI
-
-## Project Structure
-
-- `lib.rs`: Core library functionality with extraction strategies
-- `main.rs`: CLI application using the library
-- WASM bindings for browser usage
-- Comprehensive test suite
+| Feature | Description | Default |
+| :--- | :--- | :---: |
+| `mjml` | Enable MJML format extraction and compilation | ❌ |
+| `html` | Enable HTML format extraction and compilation | ❌ |
+| `wasm-bindgen` | Enable WebAssembly bindings for browser usage | ❌ |
+| `chrono` | Enable timestamps in PO file headers | ✅ |
+| `rspolib` | Use `rspolib` for high-performance PO file handling in CLI | ❌ |
 
 ## Development
 
+Clone the repository and ensure you have the Rust toolchain installed.
+
 ```bash
-# Run tests
+# Run the comprehensive test suite
 cargo test
 
-# Build with specific features
+# Build with specific format support
 cargo build --features mjml,html
 
-# Test WASM build
+# Test WebAssembly build
 cargo build --target wasm32-unknown-unknown --features wasm-bindgen
+
+# Run Clippy for linting
+cargo clippy --workspace --tests -- -D warnings
 ```
 
-## License
-
-MIT License
+> [!IMPORTANT]
+> When contributing new format support, ensure that the extraction strategy correctly handles nested elements and preserves the original document's whitespace structure. Refer to existing strategies in `lib.rs` for implementation patterns.

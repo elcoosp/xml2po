@@ -33,7 +33,7 @@ impl ExtractionStrategy for MjmlStrategy {
     fn is_translatable_element(&self, element_name: &str) -> bool {
         matches!(
             element_name,
-            "mj-title" | "mj-text" | "mj-button" | "strong"
+            "mj-title" | "mj-text" | "mj-button" | "strong" | "em"
         )
     }
 
