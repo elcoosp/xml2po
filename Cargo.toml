@@ -1,22 +1,66 @@
 [package]
 name = "xml2po"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Generic XML/HTML to PO file converter with format-specific strategies"
+rust-version = "1.86"
+description = "Generic XML/HTML/MJML to PO file converter with format-specific strategies, attribute extraction, msgctxt support and a CI-friendly CLI"
+authors = ["elcoosp"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/elcoosp/xml2po"
+homepage = "https://github.com/elcoosp/xml2po"
+documentation = "https://docs.rs/xml2po"
+keywords = ["i18n", "gettext", "po", "mjml", "html"]
+categories = ["localization", "command-line-utilities", "parser-implementations"]
+include = ["src/**", "tests/**", "docs/**", "examples/**", "README.md", "LICENSE", "CHANGELOG.md"]
+
+[lib]
+name = "xml2po"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xml2po"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [dependencies]
-quick-xml = { version = "0.30", features = ["encoding", "serialize"] }
-anyhow = "1.0"
-chrono = { version = "0.4", features = ["clock"] }
+quick-xml = "0.42.0"
+thiserror = "2.0.17"
 
-clap = { version = "4.0", features = ["derive"] }
-regex = "1.12.2"
-rspolib = "0.1.1"
+# Optional library dependencies
+chrono = { version = "0.4.45", default-features = false, features = ["clock"], optional = true }
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+
+# CLI-only dependencies (behind the `cli` feature so library builds stay lean)
+clap = { version = "4.6.7", features = ["derive"], optional = true }
+rayon = { version = "1.11.0", optional = true }
+encoding_rs = { version = "0.8.35", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.130"
+serde-wasm-bindgen = "0.6.5"
+console_error_panic_hook = "0.1.7"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
 [features]
-default = ["mjml", "chrono"]
+default = ["cli", "mjml", "html", "xml", "chrono", "parallel", "cli-encoding"]
+# Format strategies
 mjml = []
 html = []
-chrono=[]
-wasm32=[]
-rspolib=[]
-all = ["mjml", "html", "chrono", "rspolib"]
+xml = []
+# Library features
+chrono = ["dep:chrono"]
+serde = ["dep:serde"]
+# CLI features
+cli = ["dep:clap"]
+parallel = ["dep:rayon", "cli"]
+cli-encoding = ["dep:encoding_rs", "cli"]
+all = ["mjml", "html", "xml", "chrono", "serde", "cli", "parallel", "cli-encoding"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
