@@ -65,6 +65,27 @@ xml2po compile --input template.mjml --po translations.po --output translated.mj
 xml2po compile --input page.html --po translations.po --format html
 ```
 
+**CI drift gate and coverage reporting:**
+```bash
+# Fail (exit 1) when the catalog is out of sync with the sources
+xml2po check translations.po src/*.mjml
+
+# Show translation coverage
+xml2po stats translations.po
+
+# List the formats compiled into this build
+xml2po formats
+```
+
+**POT templates and wrapping control:**
+```bash
+# Extract a .pot template with the conventional PACKAGE VERSION header
+xml2po extract --template --output template.pot src/*.mjml
+
+# Control PO wrapping (0 = no wrapping, gettext --no-wrap semantics)
+xml2po extract --output-width 0 src/*.mjml
+```
+
 ### Rust Library
 
 **Extract messages from content:**
@@ -113,6 +134,7 @@ assert_eq!(translated, "<p>Hola Mundo</p>");
 | :--- | :--- |
 | **MJML** | `mj-title`, `mj-text`, `mj-button` |
 | **HTML** | `p`, `h1`–`h6`, `span`, `div`, `a`, `button`, `label`, `li`, `td`, `th`, `title`, `option`, `strong`, `em`, `b`, `i` |
+| **XML** | Everything (generic fallback for arbitrary XML documents) |
 
 > [!NOTE]
 > **Smart Filtering**  
@@ -126,11 +148,14 @@ assert_eq!(translated, "<p>Hola Mundo</p>");
 
 | Feature | Description | Default |
 | :--- | :--- | :---: |
-| `mjml` | Enable MJML format extraction and compilation | ❌ |
-| `html` | Enable HTML format extraction and compilation | ❌ |
-| `wasm-bindgen` | Enable WebAssembly bindings for browser usage | ❌ |
+| `mjml` | Enable MJML format extraction and compilation | ✅ |
+| `html` | Enable HTML format extraction and compilation | ✅ |
+| `xml` | Enable the generic XML fallback strategy | ✅ |
 | `chrono` | Enable timestamps in PO file headers | ✅ |
-| `rspolib` | Use `rspolib` for high-performance PO file handling in CLI | ❌ |
+| `serde` | `Serialize`/`Deserialize` for messages, options and catalogs | ❌ |
+| `cli` | The command-line interface binary | ✅ |
+| `parallel` | Rayon-parallel extraction of multiple input files | ✅ |
+| `cli-encoding` | UTF-16 (BOM) input support in the CLI | ✅ |
 
 ## Development
 
@@ -138,17 +163,20 @@ Clone the repository and ensure you have the Rust toolchain installed.
 
 ```bash
 # Run the comprehensive test suite
-cargo test
+cargo test --all-features
 
 # Build with specific format support
-cargo build --features mjml,html
+cargo build --no-default-features --features mjml,html
 
 # Test WebAssembly build
-cargo build --target wasm32-unknown-unknown --features wasm-bindgen
+cargo build --target wasm32-unknown-unknown
 
-# Run Clippy for linting
-cargo clippy --workspace --tests -- -D warnings
+# Lint with the same pedantic configuration as CI (no allow escapes)
+cargo clippy --all-features --all-targets -- -W clippy::pedantic --deny warnings
+
+# Measure coverage (requires cargo-llvm-cov)
+cargo llvm-cov --all-features
 ```
 
 > [!IMPORTANT]
-> When contributing new format support, ensure that the extraction strategy correctly handles nested elements and preserves the original document's whitespace structure. Refer to existing strategies in `lib.rs` for implementation patterns.
+> When contributing new format support, implement the [`ExtractionStrategy`](src/strategy.rs) trait (elements, ignored elements, translatable attributes) and add a corresponding variant to `Format`. Refer to the existing strategies for implementation patterns.
