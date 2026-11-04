@@ -703,3 +703,337 @@ fn binary_missing_input_fails_with_message() {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(stderr.contains("error:"), "{stderr}");
 }
+
+// ---------------------------------------------------------------------
+// v0.3.0: inline placeholders, ITS semantics, CI gates, JSON output.
+// ---------------------------------------------------------------------
+
+/// Mixed content folds into one message by default.
+#[test]
+fn extract_inline_folds_mixed_content_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("t.html"),
+        "<html><body><p>Hello <b>bold</b> world</p></body></html>",
+    );
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.html"),
+        "-o",
+        &p(dir.path(), "out.po"),
+    ])
+    .unwrap();
+    let po = std::fs::read_to_string(dir.path().join("out.po")).unwrap();
+    assert!(po.contains(r#"msgid "Hello <b>bold</b> world""#), "{po}");
+}
+
+/// `--no-inline` restores the classic per-segment extraction.
+#[test]
+fn extract_no_inline_splits_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("t.html"),
+        "<html><body><p>Hello <b>bold</b> world</p></body></html>",
+    );
+    run_cli([
+        "extract",
+        "--no-inline",
+        &p(dir.path(), "t.html"),
+        "-o",
+        &p(dir.path(), "out.po"),
+    ])
+    .unwrap();
+    let po = std::fs::read_to_string(dir.path().join("out.po")).unwrap();
+    assert!(po.contains("msgid \"Hello\""), "{po}");
+    assert!(po.contains("msgid \"bold\""), "{po}");
+    assert!(po.contains("msgid \"world\""), "{po}");
+}
+
+/// `translate="no"` is honored by default.
+#[test]
+fn extract_respects_translate_no_attribute() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("t.html"),
+        r#"<html><body><section translate="no">Skip</section><p>Shown</p></body></html>"#,
+    );
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.html"),
+        "-o",
+        &p(dir.path(), "out.po"),
+    ])
+    .unwrap();
+    let po = std::fs::read_to_string(dir.path().join("out.po")).unwrap();
+    assert!(po.contains("msgid \"Shown\""), "{po}");
+    assert!(!po.contains("Skip"), "{po}");
+}
+
+/// `--pot` writes the template header.
+#[test]
+fn extract_pot_writes_template_header() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("t.mjml"), MJML);
+    run_cli([
+        "extract",
+        "--pot",
+        &p(dir.path(), "t.mjml"),
+        "-o",
+        &p(dir.path(), "out.pot"),
+    ])
+    .unwrap();
+    let po = std::fs::read_to_string(dir.path().join("out.pot")).unwrap();
+    assert!(po.contains("Project-Id-Version: PACKAGE VERSION"), "{po}");
+}
+
+/// `compile` applies inline translations end to end.
+#[test]
+fn compile_inline_roundtrip_through_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("t.html"),
+        "<html><body><p>Hello <b>bold</b> world</p></body></html>",
+    );
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.html"),
+        "-o",
+        &p(dir.path(), "t.po"),
+    ])
+    .unwrap();
+
+    let po_path = dir.path().join("t.po");
+    let po = std::fs::read_to_string(&po_path).unwrap();
+    let translated = po.replace(
+        "msgid \"Hello <b>bold</b> world\"\nmsgstr \"\"",
+        "msgid \"Hello <b>bold</b> world\"\nmsgstr \"Hola <b>negrita</b> mundo\"",
+    );
+    std::fs::write(&po_path, translated).unwrap();
+
+    run_cli([
+        "compile",
+        "--input",
+        &p(dir.path(), "t.html"),
+        "--po",
+        &p(dir.path(), "t.po"),
+        "-o",
+        &p(dir.path(), "fr.html"),
+    ])
+    .unwrap();
+    let out = std::fs::read_to_string(dir.path().join("fr.html")).unwrap();
+    assert!(out.contains("Hola <b>negrita</b> mundo"), "{out}");
+}
+
+/// Fuzzy translations are skipped by default and applied with
+/// `--use-fuzzy`.
+#[test]
+fn compile_fuzzy_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("t.mjml"), MJML);
+    let po_path = dir.path().join("t.po");
+    std::fs::write(
+        &po_path,
+        "#, fuzzy\nmsgid \"Hello\"\nmsgstr \"Hola (fuzzy)\"\n\nmsgid \"Title\"\nmsgstr \"Título\"\n",
+    )
+    .unwrap();
+
+    run_cli([
+        "compile",
+        "--input",
+        &p(dir.path(), "t.mjml"),
+        "--po",
+        &p(dir.path(), "t.po"),
+        "-o",
+        &p(dir.path(), "strict.mjml"),
+    ])
+    .unwrap();
+    let strict = std::fs::read_to_string(dir.path().join("strict.mjml")).unwrap();
+    assert!(strict.contains("Título"), "{strict}");
+    assert!(!strict.contains("fuzzy"), "{strict}");
+
+    run_cli([
+        "compile",
+        "--use-fuzzy",
+        "--input",
+        &p(dir.path(), "t.mjml"),
+        "--po",
+        &p(dir.path(), "t.po"),
+        "-o",
+        &p(dir.path(), "loose.mjml"),
+    ])
+    .unwrap();
+    let loose = std::fs::read_to_string(dir.path().join("loose.mjml")).unwrap();
+    assert!(loose.contains("Hola (fuzzy)"), "{loose}");
+}
+
+/// `stats --json` emits machine-readable coverage.
+#[test]
+fn stats_json_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let po_path = dir.path().join("t.po");
+    std::fs::write(
+        &po_path,
+        "msgid \"a\"\nmsgstr \"A\"\n\nmsgid \"b\"\nmsgstr \"\"\n",
+    )
+    .unwrap();
+    let code = run_cli(["stats", "--json", &p(dir.path(), "t.po")]).unwrap();
+    assert_eq!(code, 0);
+    let _ = po_path; // output goes to stdout; in-process we can't capture it
+}
+
+/// `check --min-coverage` gates on translated ratio.
+#[test]
+fn check_min_coverage_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("t.html"),
+        "<html><body><p>One</p><p>Two</p></body></html>",
+    );
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.html"),
+        "-o",
+        &p(dir.path(), "t.po"),
+    ])
+    .unwrap();
+
+    let po_path = dir.path().join("t.po");
+    let po = std::fs::read_to_string(&po_path).unwrap();
+    // Translate one of the two strings (50% coverage).
+    let translated = po.replace(
+        "msgid \"One\"\nmsgstr \"\"",
+        "msgid \"One\"\nmsgstr \"Uno\"",
+    );
+    std::fs::write(&po_path, translated).unwrap();
+
+    // 50% passes a 40% gate and fails a 60% gate.
+    assert_eq!(
+        run_cli([
+            "check",
+            "--min-coverage",
+            "40",
+            &p(dir.path(), "t.po"),
+            &p(dir.path(), "t.html")
+        ])
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        run_cli([
+            "check",
+            "--min-coverage",
+            "60",
+            &p(dir.path(), "t.po"),
+            &p(dir.path(), "t.html")
+        ])
+        .unwrap(),
+        1
+    );
+}
+
+/// Directory inputs with `--recursive` and `--exclude`.
+#[test]
+fn extract_recursive_with_excludes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("src");
+    std::fs::create_dir_all(root.join("pages")).unwrap();
+    std::fs::create_dir_all(root.join("drafts")).unwrap();
+    std::fs::write(
+        root.join("index.html"),
+        "<html><body><p>Main</p></body></html>",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pages").join("about.html"),
+        "<html><body><p>About</p></body></html>",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("drafts").join("wip.html"),
+        "<html><body><p>Draft</p></body></html>",
+    )
+    .unwrap();
+    std::fs::write(root.join("notes.txt"), "not html").unwrap();
+
+    run_cli([
+        "extract",
+        "--recursive",
+        "--exclude",
+        "drafts/*",
+        &p(dir.path(), "src"),
+        "--format",
+        "html",
+        "-o",
+        &p(dir.path(), "out.po"),
+    ])
+    .unwrap();
+    let po = std::fs::read_to_string(dir.path().join("out.po")).unwrap();
+    assert!(po.contains("msgid \"Main\""), "{po}");
+    assert!(po.contains("msgid \"About\""), "{po}");
+    assert!(!po.contains("Draft"), "{po}");
+}
+
+/// `update` merges translations into an existing catalog.
+#[test]
+fn update_subcommand_merges_and_obsoletes() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("t.mjml"), MJML);
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.mjml"),
+        "-o",
+        &p(dir.path(), "t.po"),
+    ])
+    .unwrap();
+
+    let po_path = dir.path().join("t.po");
+    let po = std::fs::read_to_string(&po_path).unwrap();
+    let translated = po.replace(
+        "msgid \"Hello\"\nmsgstr \"\"",
+        "msgid \"Hello\"\nmsgstr \"Hola\"",
+    );
+    std::fs::write(&po_path, translated).unwrap();
+
+    // The source changes: "Click" disappears, "Buy" appears.
+    write(
+        &dir.path().join("t.mjml"),
+        "<mjml><body><mj-text>Hello</mj-text><mj-title>Title</mj-title><mj-button>Buy</mj-button></body></mjml>",
+    );
+    run_cli([
+        "update",
+        &p(dir.path(), "t.mjml"),
+        "-o",
+        &p(dir.path(), "t.po"),
+    ])
+    .unwrap();
+
+    let po = std::fs::read_to_string(&po_path).unwrap();
+    assert!(po.contains("msgid \"Buy\""), "{po}");
+    assert!(po.contains("msgstr \"Hola\""), "{po}");
+    // The removed string becomes obsolete instead of vanishing.
+    assert!(po.contains("#~ msgid \"Click\""), "{po}");
+}
+
+/// `--json` on check prints machine-readable drift.
+#[test]
+fn check_json_flag_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("t.mjml"), MJML);
+    run_cli([
+        "extract",
+        &p(dir.path(), "t.mjml"),
+        "-o",
+        &p(dir.path(), "t.po"),
+    ])
+    .unwrap();
+    assert_eq!(
+        run_cli([
+            "check",
+            "--json",
+            &p(dir.path(), "t.po"),
+            &p(dir.path(), "t.mjml")
+        ])
+        .unwrap(),
+        0
+    );
+}
