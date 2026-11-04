@@ -63,6 +63,25 @@ jobs:
       - run: cargo check --no-default-features
       - run: cargo check --no-default-features --features mjml,html,xml,serde,chrono
 
+  features:
+    name: features (${{ matrix.set }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        set:
+          - "--no-default-features"
+          - "--no-default-features --features html,mjml,xml"
+          - "--no-default-features --features serde,xliff"
+          - "--no-default-features --features cli"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Library builds must stay lean: every feature combination compiles
+      # and passes its tests.
+      - run: cargo test ${{ matrix.set }}
+
   wasm:
     name: wasm32 build
     runs-on: ubuntu-latest
