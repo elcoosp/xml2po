@@ -4,20 +4,27 @@
 //! gettext PO catalogs, and compile translated PO catalogs back into the
 //! source documents.
 //!
-//! The crate is organized around three building blocks:
+//! ## Why xml2po
 //!
-//! 1. **Strategies** ([`ExtractionStrategy`], [`Format`]) decide what is
-//!    translatable per format — elements, ignored elements and translatable
-//!    attributes. Built-ins: MJML, HTML, generic XML.
-//! 2. **Extraction** ([`extract_messages`]) streams a document and yields
-//!    [`Message`]s with real line-number [`SourceRef`]s, deterministically
-//!    ordered.
-//! 3. **Compilation** ([`apply_translations`]) streams a document again and
-//!    replaces leaf text segments and attribute values whose source string
-//!    has a translation, preserving whitespace padding and entities.
-//!
-//! [`PoCatalog`] handles PO parsing/serialization (with gettext-style
-//! wrapping, `msgctxt`, references and merge support).
+//! - **Markup-aware extraction.** Mixed content is folded into *one*
+//!   message with inline placeholders:
+//!   `<p>Hello <b>bold</b> world</p>` becomes the msgid
+//!   `Hello <b>bold</b> world`. Translators reorder freely; compilation
+//!   re-inserts the original tags (attributes included) and rejects
+//!   translations whose markup does not match.
+//! - **ITS semantics.** The HTML5/ITS `translate="yes|no"` attribute
+//!   (and `its:translate`) is honored out of the box; ignored inline
+//!   content such as `<span translate="no">ACME</span>` is kept verbatim
+//!   inside the msgid, itstool-style.
+//! - **Lossless PO layer.** Plural forms (`msgstr[N]`), `#, flags`,
+//!   `#|` previous msgids and `#~` obsolete entries all round-trip, so
+//!   an `extract --merge` cycle never loses translator work. Removed
+//!   strings become obsolete; returning strings are resurrected with
+//!   their old translation.
+//! - **CI-friendly.** `check` gates catalogs on drift and coverage,
+//!   `stats --json` and `check --json` emit machine-readable output.
+//! - **XLIFF bridge.** Export catalogs to XLIFF 1.2 for CAT tools and
+//!   import them back (feature `xliff`).
 //!
 //! ## Example: extract → translate → compile
 //!
@@ -27,25 +34,35 @@
 //! use std::collections::HashMap;
 //!
 //! # fn main() -> Result<(), xml2po::Error> {
-//! let content = r#"<mjml><mj-text>Hello World</mj-text></mjml>"#;
-//! let strategy = get_strategy("mjml")?;
+//! let content = r#"<p>Hello <b>bold</b> world</p>"#;
+//! let strategy = get_strategy("html")?;
 //!
-//! // 1. Extract (references carry real line numbers).
-//! let messages = extract_messages(content, "template.mjml", strategy)?;
+//! // 1. Extract: one message, inline tags folded in as placeholders.
+//! let messages = extract_messages(content, "page.html", strategy)?;
+//! assert_eq!(messages[0].msgid, "Hello <b>bold</b> world");
 //!
 //! // 2. Produce a PO file, hand it to translators, read it back.
 //! let po = xml2po::po::messages_to_po(&messages, None);
-//! let catalog = PoCatalog::parse(&po)?;
+//! let mut catalog = PoCatalog::parse(&po)?;
+//! catalog.set_translation(
+//!     xml2po::message::CatalogKey::new(None, "Hello <b>bold</b> world"),
+//!     "Hola <b>negrita</b> mundo",
+//! );
 //!
-//! // 3. Compile translations back into the document.
-//! let translated =
-//!     apply_translations(content, &catalog.translations(), strategy)?;
-//! # assert!(translated.contains("Hello World"));
+//! // 3. Compile: the original `<b>` tag is re-inserted verbatim.
+//! let translated = apply_translations(content, &catalog.translations(), strategy)?;
+//! assert!(translated.contains("Hola <b>negrita</b> mundo"));
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## Features
+//! ## Example: XLIFF round trip
+//!
+//! See the [`xliff`] module (feature `xliff`) for the CAT-tool bridge:
+//! [`catalog_to_xliff`] and [`catalog_from_xliff`] exchange catalogs with
+//! professional translation tools while preserving inline markup.
+//!
+//! ## Feature flags
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
@@ -53,7 +70,8 @@
 //! | `html` | ✅ | HTML strategy (incl. `alt`/`title`/`placeholder`/`aria-label` attributes) |
 //! | `xml` | ✅ | Generic XML strategy |
 //! | `chrono` | ✅ | Timestamps in generated PO headers |
-//! | `serde` | ❌ | `Serialize`/`Deserialize` for messages and catalogs |
+//! | `serde` | ❌ | `Serialize`/`Deserialize` for messages, options and catalogs |
+//! | `xliff` | ✅ | XLIFF 1.2 import/export ([`catalog_to_xliff`], [`catalog_from_xliff`]) |
 //! | `cli` | ✅ | The command-line interface binary |
 //! | `parallel` | ✅ | Rayon-parallel extraction of multiple files in the CLI |
 //!
@@ -70,6 +88,9 @@ pub mod message;
 pub mod options;
 pub mod po;
 pub mod strategy;
+
+#[cfg(feature = "xliff")]
+pub mod xliff;
 
 #[cfg(feature = "cli")]
 pub mod cli;
@@ -88,6 +109,9 @@ pub use strategy::{
     ExtractionStrategy, Format, HtmlStrategy, MjmlStrategy, ResolvedRule, XmlStrategy,
     available_formats, get_format, get_strategy,
 };
+
+#[cfg(feature = "xliff")]
+pub use xliff::{catalog_from_xliff, catalog_to_xliff};
 
 /// Decodes raw file bytes into a UTF-8 string, honoring UTF-8/UTF-16 BOMs.
 ///
@@ -128,7 +152,7 @@ mod integration_tests {
     #[test]
     fn end_to_end_extract_merge_compile() {
         let content = r#"<html><body><p>Welcome</p><img alt="Logo"/><p>Welcome</p></body></html>"#;
-        let strategy = get_strategy("html").unwrap();
+        let strategy = &HtmlStrategy;
 
         // First run: fresh extraction.
         let messages = extract_messages(content, "page.html", strategy).unwrap();
@@ -156,8 +180,10 @@ mod integration_tests {
 
     #[test]
     fn lib_reexports_are_usable() {
-        // available_formats
-        assert!(available_formats().contains(&"mjml"));
+        // Every advertised format resolves.
+        for name in available_formats() {
+            assert!(get_strategy(name).is_ok(), "{name}");
+        }
         // parse_po_to_translations
         let m = parse_po_to_translations("msgid \"a\"\nmsgstr \"A\"\n").unwrap();
         assert_eq!(m.get("a").map(String::as_str), Some("A"));
@@ -181,7 +207,7 @@ mod integration_tests {
         assert!(get_strategy("klingon").is_err());
         let text = get_format("klingon").unwrap_err().to_string();
         assert!(text.contains("klingon"));
-        assert!(text.contains("mjml"));
+        assert!(text.contains("unsupported format"));
     }
 
     #[test]
