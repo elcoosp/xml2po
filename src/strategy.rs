@@ -32,6 +32,16 @@ pub trait ExtractionStrategy: Send + Sync {
         &[]
     }
 
+    /// Whether this element is *inline*: when inline placeholders are
+    /// enabled it folds into the surrounding message as a `<tag>`
+    /// placeholder instead of splitting the segment. Block-level and
+    /// unknown elements split the segment like before. Defaults to
+    /// `false`, so custom strategies keep the classic behavior until
+    /// they opt in.
+    fn is_inline_element(&self, _element: &str) -> bool {
+        false
+    }
+
     /// Whether a text node is translatable. Defaults to the shared
     /// heuristic in [`crate::filter`].
     fn is_translatable_text(&self, text: &str) -> bool {
@@ -40,9 +50,6 @@ pub trait ExtractionStrategy: Send + Sync {
 
     /// Resolves the effective element set by merging the strategy rules
     /// with user-supplied [`ExtractionOptions`].
-    ///
-    /// The returned flags are, in order: text translatable, element
-    /// ignored, attribute translatable.
     fn resolve(
         &self,
         element: &str,
@@ -64,11 +71,16 @@ pub trait ExtractionStrategy: Send + Sync {
             text_translatable,
             ignored,
             attribute_translatable: attr_translatable,
+            inline: self.is_inline_element(element),
         }
     }
 }
 
 /// Outcome of merging a strategy with user options for one element.
+///
+/// The four flags are intentionally independent: every combination is
+/// meaningful, so grouping them would obscure the trait contract.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedRule {
     /// Text content of the element (or the attribute value) is translatable.
@@ -77,6 +89,56 @@ pub struct ResolvedRule {
     pub ignored: bool,
     /// The attribute (if any) is translatable.
     pub attribute_translatable: bool,
+    /// Element folds into the surrounding message as an inline
+    /// placeholder (see [`ExtractionStrategy::is_inline_element`]).
+    pub inline: bool,
+}
+
+/// Value of the HTML5/ITS `translate` attribute: `Some(true)` for
+/// `translate="yes"`, `Some(false)` for `translate="no"`, `None` when
+/// absent. Both the plain `translate` attribute and the namespaced
+/// `its:translate` form are recognized.
+pub(crate) fn translate_directive(attributes: &[(String, String)]) -> Option<bool> {
+    attributes.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case("translate") || name.eq_ignore_ascii_case("its:translate") {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "no" => Some(false),
+                "yes" => Some(true),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    })
+}
+
+/// Merges a strategy's rule for one element with the element-level
+/// `translate="yes|no"` directive.
+///
+/// `translate="no"` behaves like an ignored element (nothing inside is
+/// extracted or translated); `translate="yes"` forces the text
+/// translatable unless the element is ignored altogether.
+pub(crate) fn effective_rule(
+    strategy: &dyn ExtractionStrategy,
+    element: &str,
+    translate: Option<bool>,
+    options: &ExtractionOptions,
+) -> ResolvedRule {
+    let mut rule = strategy.resolve(element, None, options);
+    if options.respect_translate_attribute {
+        match translate {
+            Some(false) => {
+                rule.ignored = true;
+                rule.text_translatable = false;
+                rule.attribute_translatable = false;
+            }
+            Some(true) if !rule.ignored => {
+                rule.text_translatable = true;
+            }
+            _ => {}
+        }
+    }
+    rule
 }
 
 /// The MJML e-mail framework: `mj-title`, `mj-text`, `mj-button` plus
@@ -102,6 +164,10 @@ impl ExtractionStrategy for MjmlStrategy {
 
     fn is_ignored_element(&self, element: &str) -> bool {
         matches!(element, "mj-style" | "style" | "script")
+    }
+
+    fn is_inline_element(&self, element: &str) -> bool {
+        matches!(element, "strong" | "em")
     }
 }
 
@@ -152,6 +218,41 @@ impl ExtractionStrategy for HtmlStrategy {
 
     fn translatable_attributes(&self) -> &[&str] {
         &["alt", "title", "placeholder", "aria-label"]
+    }
+
+    /// HTML phrasing content folds into the surrounding message.
+    /// `code`/`pre`/`script`/`style` stay ignored, so they never fold.
+    fn is_inline_element(&self, element: &str) -> bool {
+        matches!(
+            element,
+            "a" | "abbr"
+                | "b"
+                | "bdi"
+                | "bdo"
+                | "br"
+                | "cite"
+                | "data"
+                | "dfn"
+                | "em"
+                | "i"
+                | "kbd"
+                | "mark"
+                | "q"
+                | "rp"
+                | "rt"
+                | "ruby"
+                | "s"
+                | "samp"
+                | "small"
+                | "span"
+                | "strong"
+                | "sub"
+                | "sup"
+                | "time"
+                | "u"
+                | "var"
+                | "wbr"
+        )
     }
 }
 
@@ -385,25 +486,34 @@ mod tests {
 
     #[test]
     fn format_lookup() {
-        assert!(get_format("mjml").is_ok());
-        assert!(get_format("MJML").is_ok());
-        assert!(get_format("Html").is_ok());
-        assert!(get_format("xml").is_ok());
-        assert!(get_strategy("XML").is_ok());
-        let err = get_format("nope").unwrap_err();
-        assert!(err.to_string().contains("unsupported format"));
+        // Compiled-in formats resolve case-insensitively; unknown names
+        // list what is available.
+        assert!(
+            get_format("nope")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported format")
+        );
         for f in available_formats() {
             assert!(get_format(f).is_ok(), "{f}");
+            assert!(get_format(&f.to_ascii_uppercase()).is_ok(), "{f}");
         }
     }
 
     #[test]
     fn available_formats_lists_all_builtins() {
         let formats = available_formats();
-        assert!(formats.contains(&"mjml"));
-        assert!(formats.contains(&"html"));
-        assert!(formats.contains(&"xml"));
-        assert_eq!(formats.len(), 3);
+        let mut expected = Vec::new();
+        if cfg!(feature = "mjml") {
+            expected.push("mjml");
+        }
+        if cfg!(feature = "html") {
+            expected.push("html");
+        }
+        if cfg!(feature = "xml") {
+            expected.push("xml");
+        }
+        assert_eq!(formats, expected);
     }
 
     #[test]
@@ -411,5 +521,85 @@ mod tests {
         assert_eq!(Format::Mjml.name(), "mjml");
         assert_eq!(Format::Html.name(), "html");
         assert_eq!(Format::Xml.name(), "xml");
+    }
+
+    #[test]
+    fn inline_classification() {
+        for el in ["b", "i", "em", "strong", "span", "a", "br"] {
+            assert!(HtmlStrategy.is_inline_element(el), "{el}");
+        }
+        for el in ["p", "div", "h1", "td", "button", "code", "pre"] {
+            assert!(!HtmlStrategy.is_inline_element(el), "{el}");
+        }
+        assert!(MjmlStrategy.is_inline_element("strong"));
+        assert!(MjmlStrategy.is_inline_element("em"));
+        assert!(!MjmlStrategy.is_inline_element("mj-text"));
+        // Custom strategies default to no inline folding.
+        assert!(!Minimal.is_inline_element("msg"));
+    }
+
+    #[test]
+    fn resolve_reports_inline_flag() {
+        let options = ExtractionOptions::default();
+        assert!(HtmlStrategy.resolve("b", None, &options).inline);
+        assert!(!HtmlStrategy.resolve("p", None, &options).inline);
+    }
+
+    #[test]
+    fn translate_directive_parsing() {
+        let attrs = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        assert_eq!(
+            translate_directive(&attrs(&[("translate", "no")])),
+            Some(false)
+        );
+        assert_eq!(
+            translate_directive(&attrs(&[("translate", "yes")])),
+            Some(true)
+        );
+        assert_eq!(
+            translate_directive(&attrs(&[("its:translate", "no")])),
+            Some(false)
+        );
+        assert_eq!(
+            translate_directive(&attrs(&[("TRANSLATE", "NO")])),
+            Some(false)
+        );
+        assert_eq!(translate_directive(&attrs(&[("translate", "bogus")])), None);
+        assert_eq!(translate_directive(&attrs(&[("class", "x")])), None);
+    }
+
+    #[test]
+    fn effective_rule_respects_translate_attribute() {
+        let options = ExtractionOptions::default();
+
+        // translate="no" ignores the subtree, attributes included.
+        let rule = effective_rule(&HtmlStrategy, "p", Some(false), &options);
+        assert!(rule.ignored);
+        assert!(!rule.text_translatable);
+
+        // translate="yes" forces even unlisted elements.
+        let rule = effective_rule(&HtmlStrategy, "figcaption", Some(true), &options);
+        assert!(!rule.ignored);
+        assert!(rule.text_translatable);
+
+        // Ignored elements stay ignored even with translate="yes".
+        let rule = effective_rule(&HtmlStrategy, "script", Some(true), &options);
+        assert!(rule.ignored);
+
+        // No directive: defaults.
+        let rule = effective_rule(&HtmlStrategy, "p", None, &options);
+        assert!(rule.text_translatable);
+
+        // Opting out restores plain strategy behavior.
+        let options = ExtractionOptions::builder()
+            .respect_translate_attribute(false)
+            .build();
+        let rule = effective_rule(&HtmlStrategy, "p", Some(false), &options);
+        assert!(rule.text_translatable);
     }
 }
