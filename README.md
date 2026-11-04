@@ -1,11 +1,11 @@
 <div align="center">
   <img src="docs/logo.png" alt="xml2po Logo" width="300"/>
   <p>
-    <strong>Extract and compile translations for XML, HTML, and MJML</strong><br/>
-    A high-performance Rust library and CLI tool for seamless PO (Portable Object) file integration.
+    <strong>Markup-aware translation workflows for XML, HTML and MJML</strong><br/>
+    Extract to PO, translate anywhere (gettext, Weblate, Crowdin, CAT tools via XLIFF), compile back — without ever losing a translation.
   </p>
   <p>
-    <img src="https://img.shields.io/badge/Rust-1.94%20%7C%202024-000000?style=flat-square&logo=rust" alt="Rust"/>
+    <img src="https://img.shields.io/badge/Rust-1.86%20%7C%202024-000000?style=flat-square&logo=rust" alt="Rust"/>
     <img src="https://img.shields.io/crates/v/xml2po?style=flat-square" alt="Crates.io"/>
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License MIT"/>
     <img src="https://img.shields.io/badge/Target-Native%20%2B%20WASM-6F4E37?style=flat-square" alt="WASM Support"/>
@@ -14,169 +14,238 @@
 
 ---
 
-`xml2po` streamlines the localization workflow by extracting translatable strings from XML, HTML, and MJML files into standard PO files, and compiling translated PO files back into the original format while perfectly preserving whitespace and structure.
+`xml2po` streamlines localization for XML-flavored templates: it extracts
+translatable strings into standard PO files, merges translator work back
+without data loss, and compiles translations into the original documents
+while preserving whitespace, entities and markup byte-for-byte.
 
-## Features
+## Highlights
 
-- **Multi-Format Support**: Native extraction and compilation for MJML and HTML.
-- **Smart Text Detection**: Automatically filters out non-translatable content (URLs, emails, file paths, pure whitespace).
-- **Standard PO Integration**: Fully compatible with standard PO file workflows and tools (e.g., gettext, Crowdin, Weblate).
-- **Whitespace Preservation**: Maintains original formatting and indentation when applying translations.
-- **WebAssembly Ready**: Compiles to WASM for seamless in-browser localization workflows.
-- **Flexible CLI**: Intuitive command-line interface designed for batch processing and CI/CD pipelines.
+- **Inline markup placeholders** — `<p>Hello <b>bold</b> world</p>` is one
+  msgid: `Hello <b>bold</b> world`. Sentences stay whole, translators
+  reorder words freely, and compilation re-inserts the *original* tags
+  (attributes included). Translations whose markup doesn't match are
+  rejected safely and counted in the report.
+- **ITS-lite semantics** — HTML5 `translate="no|yes"` and
+  `its:translate` are honored by default. Non-translatable inline content
+  (`<span translate="no">ACME</span>`) is kept verbatim inside the msgid,
+  itstool-style.
+- **Lossless PO layer** — full plural round-trip (`msgstr[N]`), `#, flags`
+  (fuzzy translations are skipped unless you ask for them), `#|` previous
+  msgids, `#~` obsolete entries preserved across merges, typed header
+  metadata (`PoMetadata`), and strict duplicate detection.
+- **CI gates** — `check` fails on catalog drift or low coverage;
+  `stats --json` / `check --json` for machine-readable pipelines.
+- **XLIFF 1.2 bridge** — exchange catalogs with Trados, memoQ, Lokalise,
+  Transifex and friends (`catalog_to_xliff` / `catalog_from_xliff`).
+- **WebAssembly ready** — compiles to `wasm32-unknown-unknown` for
+  in-browser localization workflows.
+- **Error messages with line:column** — XML failures point at the exact
+  position, not a byte offset.
 
 ## Installation
 
-### CLI Tool
-Install the binary directly via Cargo:
+### CLI
+
 ```bash
 cargo install xml2po
 ```
 
 ### Library
-Add `xml2po` to your `Cargo.toml`, enabling only the features you need:
+
 ```toml
 [dependencies]
-xml2po = { version = "0.1.0", features = ["mjml", "html"] }
+xml2po = "0.3"
 ```
 
-## Usage
+## Quickstart
 
-### Command-Line Interface
+### Command line
 
-**Extract translatable strings to a PO file:**
 ```bash
-# Extract from MJML files
-xml2po extract --format mjml input1.mjml input2.mjml --output translations.po
+# Extract translatable strings (inline placeholders on by default)
+xml2po extract src/*.html --output messages.po
 
-# Extract from multiple HTML files
-xml2po extract --format html *.html
+# Refresh a catalog after source changes: translations are kept,
+# removed strings become #~ obsolete entries
+xml2po update src/*.html --output messages.po
 
-# Enable verbose output for debugging
-xml2po extract -v --format mjml template.mjml
+# Compile a translated document
+xml2po compile --input page.html --po fr.po --output fr.html
+
+# CI: fail when the catalog drifts or coverage drops below 90%
+xml2po check --min-coverage 90 messages.po src/*.html
+xml2po stats --json messages.po
 ```
 
-**Compile translations back to the source format:**
-```bash
-# Compile MJML with translations to a new file
-xml2po compile --input template.mjml --po translations.po --output translated.mjml
+### Library
 
-# Compile HTML and output directly to stdout
-xml2po compile --input page.html --po translations.po --format html
-```
-
-**CI drift gate and coverage reporting:**
-```bash
-# Fail (exit 1) when the catalog is out of sync with the sources
-xml2po check translations.po src/*.mjml
-
-# Show translation coverage
-xml2po stats translations.po
-
-# List the formats compiled into this build
-xml2po formats
-```
-
-**POT templates and wrapping control:**
-```bash
-# Extract a .pot template with the conventional PACKAGE VERSION header
-xml2po extract --template --output template.pot src/*.mjml
-
-# Control PO wrapping (0 = no wrapping, gettext --no-wrap semantics)
-xml2po extract --output-width 0 src/*.mjml
-```
-
-### Rust Library
-
-**Extract messages from content:**
 ```rust
-use xml2po::{extract_messages, get_strategy};
+use xml2po::{extract_messages, apply_translations, get_strategy};
+use xml2po::po::PoCatalog;
 
-let content = r#"<mjml><mj-text>Hello World</mj-text></mjml>"#;
-let strategy = get_strategy("mjml")?;
-let messages = extract_messages(content, "template.mjml", strategy.as_ref())?;
-
-for message in messages {
-    println!("Found: {} at {:?}", message.msgid, message.references);
-}
-```
-
-**Apply translations to content:**
-```rust
-use xml2po::{apply_translations, parse_po_to_translations, get_strategy};
-
-let content = "<p>Hello World</p>";
-let po_content = r#"
-msgid "Hello World"
-msgstr "Hola Mundo"
-"#;
-
+let content = r#"<p>Hello <b>bold</b> world</p>"#;
 let strategy = get_strategy("html")?;
-let translations = parse_po_to_translations(po_content)?;
-let translated = apply_translations(content, &translations, strategy.as_ref())?;
 
-assert_eq!(translated, "<p>Hola Mundo</p>");
+// One message per sentence — inline tags folded in.
+let messages = extract_messages(content, "page.html", strategy)?;
+assert_eq!(messages[0].msgid, "Hello <b>bold</b> world");
+
+// Translate and compile: the original <b> tag is re-inserted.
+let mut catalog = PoCatalog::from_messages(&messages);
+catalog.set_translation(
+    xml2po::message::CatalogKey::new(None, "Hello <b>bold</b> world"),
+    "Hola <b>negrita</b> mundo",
+);
+let translated = apply_translations(content, &catalog.translations(), strategy)?;
+assert_eq!(translated, "<p>Hola <b>negrita</b> mundo</p>");
 ```
 
-> [!TIP]
-> **WebAssembly Usage**  
-> The library can be compiled to WebAssembly (`wasm32-unknown-unknown`) for direct use in web applications via `wasm-bindgen`, enabling client-side extraction and compilation.
-> ```javascript
-> const poContent = await extractToPo(mjmlContent, "mjml", "template.mjml");
-> const translated = await compileWithPo(htmlContent, poContent, "html");
-> ```
+## How inline placeholders work
 
-## Supported Formats & Elements
+During **extraction**, inline elements (`b`, `em`, `span`, `a`, `strong`,
+`br`, …) fold into the surrounding message as attribute-free tags, and
+literal text is XML-escaped (`&` → `&amp;`, `<` → `&lt;`) so msgids stay
+unambiguous:
 
-`xml2po` targets specific, semantically translatable elements to avoid breaking markup or extracting boilerplate.
+```html
+<p>Name: <span translate="no">ACME</span> inc.</p>
+```
 
-| Format | Translatable Elements |
+```po
+msgid "Name: <span translate=\"no\">ACME</span> inc."
+```
+
+During **compilation** the tag *sequences* of msgid and msgstr must match
+(same tags, same order). Text between tags may be reordered, split or
+merged freely — word order can change between languages. Each translation
+tag is replaced by the corresponding source tag with its original
+attributes:
+
+```html
+<p>Name: <span translate="no">ACME</span> GmbH</p>
+```
+
+| Translation | Result |
 | :--- | :--- |
-| **MJML** | `mj-title`, `mj-text`, `mj-button` |
-| **HTML** | `p`, `h1`–`h6`, `span`, `div`, `a`, `button`, `label`, `li`, `td`, `th`, `title`, `option`, `strong`, `em`, `b`, `i` |
-| **XML** | Everything (generic fallback for arbitrary XML documents) |
+| `Name: <span translate="no">ACME</span> Ltd.` | ✅ applied |
+| `Name: <span>ACME</span> Ltd.` (missing attr) | ✅ tags match by name — applied, source form restored |
+| `Name: ACME Ltd.` (tags dropped) | ❌ rejected, source kept, `skipped_invalid` +1 |
+| `Name: </span><span>ACME` (reordered) | ❌ rejected |
+
+Opt out any time: `ExtractionOptions::builder().inline_placeholders(false)`
+or the CLI flag `--no-inline` restores classic per-segment extraction.
+
+## Supported formats & elements
+
+| Format | Translatable elements | Inline elements | Translatable attributes |
+| :--- | :--- | :--- | :--- |
+| **MJML** | `mj-title`, `mj-text`, `mj-button`, `strong`, `em` | `strong`, `em` | — |
+| **HTML** | `p`, `h1`–`h6`, `span`, `div`, `a`, `button`, `label`, `li`, `td`, `th`, `title`, `option`, `strong`, `em`, `b`, `i` | the HTML phrasing set (`a`, `abbr`, `b`, `br`, `em`, `i`, `kbd`, `mark`, `q`, `small`, `span`, `strong`, `sub`, `sup`, `time`, `u`, `var`, …) | `alt`, `title`, `placeholder`, `aria-label` |
+| **XML** | everything (generic fallback) | — (opt in via a custom strategy) | — |
 
 > [!NOTE]
-> **Smart Filtering**  
-> The extraction engine automatically excludes:
-> - URLs (`http://`, `https://`, etc.)
-> - Email addresses (unless they contain translation placeholders)
-> - Pure whitespace or text without alphabetic characters
-> - File paths and protocol-based strings
+> **Smart filtering** — the extraction engine automatically excludes URLs,
+> e-mail addresses, file paths, lone entities (`&nbsp;`), hex colors,
+> pure numbers/symbols and placeholder-only strings (`%s`, `{{name}}`).
 
-## Cargo Features
+Custom formats: implement [`ExtractionStrategy`](src/strategy.rs) —
+`is_translatable_element`, `is_ignored_element`,
+`translatable_attributes` and (new in 0.3) `is_inline_element` — and
+pass it to `extract_messages` / `apply_translations`.
+
+## Smart merge: never lose a translation
+
+`extract --merge` (or the `update` subcommand) implements gettext
+`msgmerge` semantics:
+
+- strings still present keep their translation, flags, comments and
+  plural forms;
+- strings removed from the sources become `#~` obsolete entries;
+- strings that come back are **resurrected** with their old translation;
+- fuzzy translations are kept but skipped during compilation unless
+  `--use-fuzzy` (or `PoCatalog::translations_with(true)`) is set.
+
+## CI integration
+
+```yaml
+- name: Check translations
+  run: |
+    xml2po update src/templates/*.html --output locales/messages.po
+    xml2po check --min-coverage 90 locales/messages.po src/templates/*.html
+```
+
+- `check` exits `0` only when the catalog is in sync **and** coverage is
+  at or above `--min-coverage`.
+- `check --json` prints `{"clean":true,"coverage":95.0,"added":[],"removed":[]}`.
+- `stats --json` prints `{"total":42,"translated":40,"untranslated":2,"coverage":95.2}`.
+- `--recursive --exclude 'drafts/*'` extracts whole directory trees with
+  glob exclusions.
+
+> [!TIP]
+> **WebAssembly usage** — compile to `wasm32-unknown-unknown` and call
+> `extract_to_po` / `compile_with_po` from JavaScript via `wasm-bindgen`:
+> ```javascript
+> const po = extractToPo(mjmlContent, "mjml", "template.mjml");
+> const translated = compileWithPo(htmlContent, po, "html");
+> ```
+
+## Cargo features
 
 | Feature | Description | Default |
 | :--- | :--- | :---: |
-| `mjml` | Enable MJML format extraction and compilation | ✅ |
-| `html` | Enable HTML format extraction and compilation | ✅ |
-| `xml` | Enable the generic XML fallback strategy | ✅ |
-| `chrono` | Enable timestamps in PO file headers | ✅ |
+| `mjml` | MJML format extraction and compilation | ✅ |
+| `html` | HTML format extraction and compilation | ✅ |
+| `xml` | Generic XML fallback strategy | ✅ |
+| `chrono` | Timestamps in generated PO headers | ✅ |
 | `serde` | `Serialize`/`Deserialize` for messages, options and catalogs | ❌ |
+| `xliff` | XLIFF 1.2 export/import | ✅ |
 | `cli` | The command-line interface binary | ✅ |
 | `parallel` | Rayon-parallel extraction of multiple input files | ✅ |
 | `cli-encoding` | UTF-16 (BOM) input support in the CLI | ✅ |
 
+## PO feature matrix
+
+| PO construct | Extract | Parse | Serialize | Compile |
+| :--- | :---: | :---: | :---: | :---: |
+| `msgctxt` | ✅ (opt-in) | ✅ | ✅ | ✅ |
+| `msgid_plural` + `msgstr[N]` | — | ✅ | ✅ | msgstr[0] |
+| `#: references` (file:line) | ✅ | ✅ | ✅ | — |
+| `#, flags` | — | ✅ | ✅ | fuzzy policy |
+| `#|` previous msgids | — | ✅ | ✅ | — |
+| `#~` obsolete entries | ✅ (merge) | ✅ | ✅ | skipped |
+| Header metadata | ✅ | ✅ (`PoMetadata`) | ✅ | — |
+| Wrapping at 79 cols / `--no-wrap` | ✅ | ✅ | ✅ | — |
+
 ## Development
 
-Clone the repository and ensure you have the Rust toolchain installed.
-
 ```bash
-# Run the comprehensive test suite
+# Run the test suite (unit + CLI integration + doc tests)
 cargo test --all-features
 
-# Build with specific format support
-cargo build --no-default-features --features mjml,html
+# Lint with the pedantic configuration used by CI (warnings are errors)
+cargo clippy --all-features --all-targets -- -W clippy::pedantic --deny warnings
+
+# Check formatting
+cargo fmt --all -- --check
 
 # Test WebAssembly build
+rustup target add wasm32-unknown-unknown
 cargo build --target wasm32-unknown-unknown
-
-# Lint with the same pedantic configuration as CI (no allow escapes)
-cargo clippy --all-features --all-targets -- -W clippy::pedantic --deny warnings
 
 # Measure coverage (requires cargo-llvm-cov)
 cargo llvm-cov --all-features
 ```
 
+A runnable library example lives in `examples/translate_flow.rs`:
+`cargo run --example translate_flow`.
+
 > [!IMPORTANT]
-> When contributing new format support, implement the [`ExtractionStrategy`](src/strategy.rs) trait (elements, ignored elements, translatable attributes) and add a corresponding variant to `Format`. Refer to the existing strategies for implementation patterns.
+> When contributing a new format, implement the
+> [`ExtractionStrategy`](src/strategy.rs) trait (elements, ignored
+> elements, translatable attributes, inline elements) and add a variant
+> to `Format`. Refer to the built-in strategies for the pattern.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
