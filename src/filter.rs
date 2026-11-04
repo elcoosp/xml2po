@@ -31,6 +31,12 @@ pub fn is_translatable_text(text: &str) -> bool {
     if is_hex_color(trimmed) {
         return false;
     }
+    if is_path_like(trimmed) {
+        return false;
+    }
+    if is_single_entity(trimmed) {
+        return false;
+    }
     // E-mail heuristic: reject when some whitespace-separated token looks
     // like `name@host.tld`, unless placeholders are involved.
     if !trimmed.contains("{{") && trimmed.split_whitespace().any(is_email_like) {
@@ -48,6 +54,34 @@ fn is_hex_color(s: &str) -> bool {
         let len = body.len();
         matches!(len, 3 | 4 | 6 | 8) && body.chars().all(|c| c.is_ascii_hexdigit())
     })
+}
+
+/// File-system paths: absolute POSIX paths, `./`/`../` relatives, home
+/// paths (`~/…`), Windows drive paths, and a lone directory-qualified
+/// file name (`src/lib.rs`). A slash without a dot (`and/or`) or a dot
+/// without a slash (`Wait for it...`) is prose and stays accepted.
+fn is_path_like(s: &str) -> bool {
+    if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with('~') {
+        return true;
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    !s.chars().any(char::is_whitespace) && s.contains('/') && s.contains('.')
+}
+
+/// A trimmed string that is exactly one entity reference (`&nbsp;`,
+/// `&#160;`) carries nothing a translator can act on.
+fn is_single_entity(s: &str) -> bool {
+    let Some(body) = s.strip_prefix('&').and_then(|b| b.strip_suffix(';')) else {
+        return false;
+    };
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
 }
 
 /// `user@example.com`, `a.b+c@host.co.uk`, …
@@ -187,6 +221,38 @@ mod tests {
         assert!(is_translatable_text("%s new messages"));
         assert!(is_translatable_text("{0} found"));
         assert!(is_translatable_text("%1$s of %2$d"));
+    }
+
+    #[test]
+    fn rejects_lone_entity_references() {
+        for s in ["&nbsp;", "&amp;", "&#160;", "&#x41;", "&copy;"] {
+            assert!(!is_translatable_text(s), "{s:?} should be rejected");
+        }
+        // Prose that merely *contains* entities stays acceptable.
+        assert!(is_translatable_text("Fish &amp; Chips"));
+        assert!(is_translatable_text("5 &lt; 6 &amp; more"));
+    }
+
+    #[test]
+    fn rejects_file_paths() {
+        for s in [
+            "/usr/local/bin",
+            "./config.toml",
+            "../sibling.xml",
+            "~/notes.md",
+            "C:\\Users\\name\\doc.html",
+            "C:/Program Files/app",
+            "src/lib.rs",
+            "assets/img/logo.svg",
+        ] {
+            assert!(!is_translatable_text(s), "{s:?} should be rejected");
+        }
+        // Slashes without dots are prose ("and/or"), dots without slashes
+        // are sentences — both must survive.
+        assert!(is_translatable_text("and/or"));
+        assert!(is_translatable_text("3/4 cup of flour"));
+        assert!(is_translatable_text("Wait for it..."));
+        assert!(is_translatable_text("v1.2 changelog"));
     }
 
     #[test]
