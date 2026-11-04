@@ -4,6 +4,7 @@
 //! path as the binary.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -34,7 +35,7 @@ pub struct Cli {
 pub enum Command {
     /// Extract translatable strings from documents into a PO file.
     Extract {
-        /// Input documents.
+        /// Input documents (or directories with `--recursive`).
         #[arg(required = true)]
         input: Vec<PathBuf>,
 
@@ -71,6 +72,27 @@ pub enum Command {
         #[arg(long)]
         template: bool,
 
+        /// Alias for `--template` (gettext convention).
+        #[arg(long)]
+        pot: bool,
+
+        /// Disable inline placeholders: split mixed content into separate
+        /// strings (v0.2 behavior).
+        #[arg(long)]
+        no_inline: bool,
+
+        /// Ignore the HTML5/ITS `translate="yes|no"` attribute.
+        #[arg(long)]
+        no_translate_attr: bool,
+
+        /// Recurse into directories instead of failing on them.
+        #[arg(long)]
+        recursive: bool,
+
+        /// Skip paths matching this glob (`*`, `?`; repeatable).
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+
         /// Wrap PO output at this many columns (0 disables wrapping).
         #[arg(long, default_value_t = 79)]
         output_width: usize,
@@ -98,6 +120,18 @@ pub enum Command {
         #[arg(long)]
         context: bool,
 
+        /// Also apply translations flagged `#, fuzzy`.
+        #[arg(long)]
+        use_fuzzy: bool,
+
+        /// Disable inline placeholders: match v0.2-style split messages.
+        #[arg(long)]
+        no_inline: bool,
+
+        /// Ignore the HTML5/ITS `translate="yes|no"` attribute.
+        #[arg(long)]
+        no_translate_attr: bool,
+
         /// Extra translatable attribute name (repeatable).
         #[arg(long = "attr")]
         attributes: Vec<String>,
@@ -115,15 +149,68 @@ pub enum Command {
     Stats {
         /// PO file to inspect.
         po: PathBuf,
+
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// List the source formats compiled into this build.
     Formats,
 
+    /// Refresh an existing PO catalog: extract, merge, and obsolete
+    /// removed strings. Equivalent to `extract --merge`.
+    Update {
+        /// Input documents (or directories with `--recursive`).
+        #[arg(required = true)]
+        input: Vec<PathBuf>,
+
+        /// PO file to update (default: first input with `.po` extension).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Source format (inferred from the first input extension when omitted).
+        #[arg(short, long)]
+        format: Option<String>,
+
+        /// Emit gettext contexts (element name / element@attribute).
+        #[arg(long)]
+        context: bool,
+
+        /// Extra element whose text is translatable (repeatable).
+        #[arg(long = "element")]
+        elements: Vec<String>,
+
+        /// Element to ignore completely (repeatable).
+        #[arg(long = "ignore")]
+        ignored: Vec<String>,
+
+        /// Extra translatable attribute name (repeatable).
+        #[arg(long = "attr")]
+        attributes: Vec<String>,
+
+        /// Disable inline placeholders.
+        #[arg(long)]
+        no_inline: bool,
+
+        /// Ignore the HTML5/ITS `translate="yes|no"` attribute.
+        #[arg(long)]
+        no_translate_attr: bool,
+
+        /// Recurse into directories.
+        #[arg(long)]
+        recursive: bool,
+
+        /// Skip paths matching this glob (repeatable).
+        #[arg(long = "exclude")]
+        excludes: Vec<String>,
+    },
+
     /// Compare a PO file against the current sources (CI drift gate).
     ///
     /// Exits with code 1 when the sources contain strings missing from the
-    /// catalog or the catalog contains strings no longer in the sources.
+    /// catalog, the catalog contains strings no longer in the sources, or
+    /// coverage is below `--min-coverage`.
     Check {
         /// PO file to compare.
         po: PathBuf,
@@ -151,6 +238,23 @@ pub enum Command {
         /// Element to ignore completely (repeatable).
         #[arg(long = "ignore")]
         ignored: Vec<String>,
+
+        /// Disable inline placeholders.
+        #[arg(long)]
+        no_inline: bool,
+
+        /// Ignore the HTML5/ITS `translate="yes|no"` attribute.
+        #[arg(long)]
+        no_translate_attr: bool,
+
+        /// Fail (exit 1) when translated coverage is below this
+        /// percentage (0-100).
+        #[arg(long)]
+        min_coverage: Option<f64>,
+
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -179,6 +283,39 @@ where
             return Ok(0);
         }
     };
+    dispatch(cli)
+}
+
+/// Shared flag bundle for the source-processing subcommands.
+struct SourceFlags<'a> {
+    context: bool,
+    elements: &'a [String],
+    ignored: &'a [String],
+    attributes: &'a [String],
+    no_inline: bool,
+    no_translate_attr: bool,
+}
+
+impl SourceFlags<'_> {
+    fn to_options(&self) -> ExtractionOptions {
+        options(
+            self.context,
+            self.elements,
+            self.ignored,
+            self.attributes,
+            self.no_inline,
+            self.no_translate_attr,
+        )
+    }
+}
+
+/// Routes a parsed CLI invocation to its subcommand.
+///
+/// The body is intentionally one block per subcommand: each block only
+/// unwraps the clap variant into its handler, and splitting them would
+/// scatter the field wiring.
+#[allow(clippy::too_many_lines)]
+fn dispatch(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Extract {
             input,
@@ -189,36 +326,99 @@ where
             elements,
             ignored,
             attributes,
-            template,
+            no_inline,
+            no_translate_attr,
+            recursive,
+            excludes,
             output_width,
-        } => extract_command(&ExtractRequest {
-            inputs: &input,
-            output: output.as_deref(),
-            format: format.as_deref(),
-            merge,
-            template,
-            output_width,
-            options: &options(context, &elements, &ignored, &attributes),
-            verbose: cli.verbose,
-        }),
+            ..
+        } => {
+            let flags = SourceFlags {
+                context,
+                elements: &elements,
+                ignored: &ignored,
+                attributes: &attributes,
+                no_inline,
+                no_translate_attr,
+            };
+            extract_command(&ExtractRequest {
+                inputs: &input,
+                output: output.as_deref(),
+                format: format.as_deref(),
+                merge,
+                output_width,
+                recursive,
+                excludes: &excludes,
+                options: &flags.to_options(),
+                verbose: cli.verbose,
+            })
+        }
+        Command::Update {
+            input,
+            output,
+            format,
+            context,
+            elements,
+            ignored,
+            attributes,
+            no_inline,
+            no_translate_attr,
+            recursive,
+            excludes,
+            ..
+        } => {
+            let flags = SourceFlags {
+                context,
+                elements: &elements,
+                ignored: &ignored,
+                attributes: &attributes,
+                no_inline,
+                no_translate_attr,
+            };
+            extract_command(&ExtractRequest {
+                inputs: &input,
+                output: output.as_deref(),
+                format: format.as_deref(),
+                merge: true,
+                output_width: 79,
+                recursive,
+                excludes: &excludes,
+                options: &flags.to_options(),
+                verbose: cli.verbose,
+            })
+        }
         Command::Compile {
             input,
             po,
             output,
             format,
             context,
+            use_fuzzy,
+            no_inline,
+            no_translate_attr,
             attributes,
             elements,
             ignored,
-        } => compile_command(
-            &input,
-            &po,
-            output.as_deref(),
-            format.as_deref(),
-            &options(context, &elements, &ignored, &attributes),
-            cli.verbose,
-        ),
-        Command::Stats { po } => stats_command(&po),
+        } => {
+            let flags = SourceFlags {
+                context,
+                elements: &elements,
+                ignored: &ignored,
+                attributes: &attributes,
+                no_inline,
+                no_translate_attr,
+            };
+            compile_command(
+                &input,
+                &po,
+                output.as_deref(),
+                format.as_deref(),
+                &flags.to_options(),
+                use_fuzzy,
+                cli.verbose,
+            )
+        }
+        Command::Stats { po, json } => stats_command(&po, json),
         Command::Formats => Ok(formats_command()),
         Command::Check {
             po,
@@ -228,13 +428,29 @@ where
             attributes,
             elements,
             ignored,
-        } => check_command(
-            &po,
-            &input,
-            format.as_deref(),
-            &options(context, &elements, &ignored, &attributes),
-            cli.verbose,
-        ),
+            no_inline,
+            no_translate_attr,
+            min_coverage,
+            json,
+        } => {
+            let flags = SourceFlags {
+                context,
+                elements: &elements,
+                ignored: &ignored,
+                attributes: &attributes,
+                no_inline,
+                no_translate_attr,
+            };
+            check_command(
+                &po,
+                &input,
+                format.as_deref(),
+                &flags.to_options(),
+                min_coverage,
+                json,
+                cli.verbose,
+            )
+        }
     }
 }
 
@@ -244,8 +460,13 @@ fn options(
     elements: &[String],
     ignored: &[String],
     attributes: &[String],
+    no_inline: bool,
+    no_translate_attr: bool,
 ) -> ExtractionOptions {
-    let mut builder = ExtractionOptions::builder().with_context(context);
+    let mut builder = ExtractionOptions::builder()
+        .with_context(context)
+        .inline_placeholders(!no_inline)
+        .respect_translate_attribute(!no_translate_attr);
     for e in elements {
         builder = builder.extra_translatable_element(e.clone());
     }
@@ -256,6 +477,124 @@ fn options(
         builder = builder.translatable_attribute(a.clone());
     }
     builder.build()
+}
+
+/// Expands directory inputs into their files (recursive walk), filtering
+/// by the format's known extensions and the exclusion globs. Files are
+/// returned in sorted order for deterministic catalogs.
+fn expand_inputs(
+    inputs: &[PathBuf],
+    format: &str,
+    recursive: bool,
+    excludes: &[String],
+) -> Result<Vec<PathBuf>> {
+    let extensions: &[&str] = match format {
+        "mjml" => &["mjml"],
+        "html" => &["html", "htm", "xhtml"],
+        "xml" => &["xml", "svg", "xsl"],
+        _ => &[], // unknown formats: take every file
+    };
+    let mut files = Vec::new();
+    for input in inputs {
+        if input.is_dir() {
+            if !recursive {
+                return Err(Error::FormatInference {
+                    path: input.clone(),
+                });
+            }
+            collect_directory(input, input, extensions, excludes, &mut files)?;
+        } else {
+            files.push(input.clone());
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+/// Recursive directory walk collecting files with matching extensions.
+/// Exclusion globs are matched against the file name, the path relative
+/// to the walked root, and the full path.
+fn collect_directory(
+    dir: &Path,
+    root: &Path,
+    extensions: &[&str],
+    excludes: &[String],
+    files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(dir).map_err(|source| Error::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let display = path.display().to_string();
+        if excludes.iter().any(|pattern| {
+            glob_match(pattern, &name)
+                || glob_match(pattern, &relative)
+                || glob_match(pattern, &display)
+        }) {
+            continue;
+        }
+        if path.is_dir() {
+            collect_directory(&path, root, extensions, excludes, files)?;
+        } else if extensions.is_empty()
+            || path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| extensions.contains(&e.to_ascii_lowercase().as_str()))
+        {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Minimal glob matching supporting `*` and `?` over path strings.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    glob_match_inner(pattern.as_bytes(), text.as_bytes())
+}
+
+fn glob_match_inner(pattern: &[u8], text: &[u8]) -> bool {
+    match (pattern.first(), text.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            glob_match_inner(&pattern[1..], text)
+                || (!text.is_empty() && glob_match_inner(pattern, &text[1..]))
+        }
+        (Some(b'?'), Some(_)) => glob_match_inner(&pattern[1..], &text[1..]),
+        (Some(p), Some(t)) if p == t => glob_match_inner(&pattern[1..], &text[1..]),
+        _ => false,
+    }
+}
+
+/// Escapes a string for embedding in hand-rolled JSON output.
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Infers the format from a file extension, falling back to `default`.
@@ -270,12 +609,8 @@ fn format_from_extension(path: &Path, default: Option<&str>) -> Result<String> {
         Some("xml" | "svg" | "xsl") => Ok("xml".to_string()),
         _ => default.map_or_else(
             || {
-                Err(Error::PoParse {
-                    line: 0,
-                    message: format!(
-                        "cannot infer format from {:?}; pass --format <mjml|html|xml>",
-                        path.display()
-                    ),
+                Err(Error::FormatInference {
+                    path: path.to_path_buf(),
                 })
             },
             |f| Ok(f.to_string()),
@@ -333,11 +668,15 @@ struct ExtractRequest<'a> {
     inputs: &'a [PathBuf],
     output: Option<&'a Path>,
     format: Option<&'a str>,
+    /// Merge with an existing catalog and write a plain (non-template)
+    /// header.
     merge: bool,
-    /// Write a POT template header instead of a PO header.
-    template: bool,
     /// Column at which to wrap PO values (0 disables wrapping).
     output_width: usize,
+    /// Recurse into directories.
+    recursive: bool,
+    /// Glob patterns to skip.
+    excludes: &'a [String],
     options: &'a ExtractionOptions,
     verbose: bool,
 }
@@ -349,14 +688,24 @@ fn extract_command(request: &ExtractRequest<'_>) -> Result<i32> {
         output,
         format,
         merge,
-        template,
         output_width,
+        recursive,
+        excludes,
         options,
         verbose,
     } = *request;
+    // `update`/`--merge` always write a real PO header; plain `extract`
+    // honors `--template`.
+    let template = !merge;
     // clap marks the inputs as required, so `inputs` is never empty here.
     let format = format_from_extension(&inputs[0], format)?;
     let strategy = get_strategy(&format)?;
+    let files = expand_inputs(inputs, &format, recursive, excludes)?;
+    if files.is_empty() {
+        return Err(Error::FormatInference {
+            path: inputs[0].clone(),
+        });
+    }
 
     let output_path = output.map_or_else(
         || {
@@ -371,7 +720,7 @@ fn extract_command(request: &ExtractRequest<'_>) -> Result<i32> {
         eprintln!(
             "extracting {} string(s) from {} file(s)",
             format.to_uppercase(),
-            inputs.len()
+            files.len()
         );
     }
 
@@ -379,14 +728,14 @@ fn extract_command(request: &ExtractRequest<'_>) -> Result<i32> {
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            inputs
+            files
                 .par_iter()
                 .map(|path| extract_file(path, strategy, options, verbose))
                 .collect::<Result<Vec<_>>>()?
         }
         #[cfg(not(feature = "parallel"))]
         {
-            inputs
+            files
                 .iter()
                 .map(|path| extract_file(path, strategy, options, verbose))
                 .collect::<Result<Vec<_>>>()?
@@ -460,12 +809,14 @@ fn formats_command() -> i32 {
 }
 
 /// `compile` subcommand.
+#[allow(clippy::too_many_arguments)]
 fn compile_command(
     input: &Path,
     po_path: &Path,
     output: Option<&Path>,
     format: Option<&str>,
     options: &ExtractionOptions,
+    use_fuzzy: bool,
     verbose: bool,
 ) -> Result<i32> {
     let format = format_from_extension(input, format)?;
@@ -476,7 +827,7 @@ fn compile_command(
         source,
     })?;
     let catalog = PoCatalog::parse(&po_content)?;
-    let translations = catalog.translations();
+    let translations = catalog.translations_with(use_fuzzy);
     if verbose {
         eprintln!("loaded {} translation(s)", translations.len());
     }
@@ -508,26 +859,39 @@ fn compile_command(
 }
 
 /// `stats` subcommand.
-fn stats_command(po_path: &Path) -> Result<i32> {
+fn stats_command(po_path: &Path, json: bool) -> Result<i32> {
     let po_content = std::fs::read_to_string(po_path).map_err(|source| Error::Io {
         path: po_path.to_path_buf(),
         source,
     })?;
     let catalog = PoCatalog::parse(&po_content)?;
     let stats = catalog.stats();
-    println!("entries:        {}", stats.total);
-    println!("translated:     {}", stats.translated);
-    println!("untranslated:   {}", stats.untranslated);
-    println!("coverage:       {:.1}%", stats.coverage_percent());
+    if json {
+        println!(
+            "{{\"total\":{},\"translated\":{},\"untranslated\":{},\"coverage\":{:.1}}}",
+            stats.total,
+            stats.translated,
+            stats.untranslated,
+            stats.coverage_percent()
+        );
+    } else {
+        println!("entries:        {}", stats.total);
+        println!("translated:     {}", stats.translated);
+        println!("untranslated:   {}", stats.untranslated);
+        println!("coverage:       {:.1}%", stats.coverage_percent());
+    }
     Ok(0)
 }
 
 /// `check` subcommand.
+#[allow(clippy::too_many_arguments)]
 fn check_command(
     po_path: &Path,
     inputs: &[PathBuf],
     format: Option<&str>,
     options: &ExtractionOptions,
+    min_coverage: Option<f64>,
+    json: bool,
     verbose: bool,
 ) -> Result<i32> {
     let po_content = std::fs::read_to_string(po_path).map_err(|source| Error::Io {
@@ -539,30 +903,79 @@ fn check_command(
     // clap marks the inputs as required, so `inputs` is never empty here.
     let format = format_from_extension(&inputs[0], format)?;
     let strategy = get_strategy(&format)?;
+    let files = expand_inputs(inputs, &format, false, &[])?;
 
-    let per_file: Vec<Vec<Message>> = inputs
+    let per_file: Vec<Vec<Message>> = files
         .iter()
         .map(|path| extract_file(path, strategy, options, verbose))
         .collect::<Result<Vec<_>>>()?;
     let messages = merge_messages(per_file);
 
     let diff = catalog.diff_messages(&messages);
-    if diff.is_clean() {
+    let stats = catalog.stats();
+    let coverage = stats.coverage_percent();
+    let coverage_ok = min_coverage.is_none_or(|min| coverage + f64::EPSILON >= min);
+
+    if json {
+        print!(
+            "{{\"clean\":{},\"coverage\":{:.1},\"added\":[",
+            diff.is_clean(),
+            coverage
+        );
+        for (i, key) in diff.added.iter().enumerate() {
+            if i > 0 {
+                print!(",");
+            }
+            print!(
+                "{{\"msgid\":\"{}\",\"msgctxt\":{}}}",
+                json_escape(&key.msgid),
+                key.msgctxt
+                    .as_ref()
+                    .map_or("null".to_string(), |c| format!("\"{}\"", json_escape(c)))
+            );
+        }
+        print!("],\"removed\":[");
+        for (i, key) in diff.removed.iter().enumerate() {
+            if i > 0 {
+                print!(",");
+            }
+            print!(
+                "{{\"msgid\":\"{}\",\"msgctxt\":{}}}",
+                json_escape(&key.msgid),
+                key.msgctxt
+                    .as_ref()
+                    .map_or("null".to_string(), |c| format!("\"{}\"", json_escape(c)))
+            );
+        }
+        println!("]}}");
+    } else if diff.is_clean() {
         println!("OK: catalog is in sync with the sources");
-        return Ok(0);
+    } else {
+        for key in &diff.added {
+            println!("+ missing from catalog: {:?}", key.msgid);
+        }
+        for key in &diff.removed {
+            println!("- stale in catalog: {:?}", key.msgid);
+        }
+        println!(
+            "catalog drift: {} added, {} removed",
+            diff.added.len(),
+            diff.removed.len()
+        );
     }
-    for key in &diff.added {
-        println!("+ missing from catalog: {:?}", key.msgid);
+
+    if !diff.is_clean() {
+        return Ok(1);
     }
-    for key in &diff.removed {
-        println!("- stale in catalog: {:?}", key.msgid);
+    match min_coverage {
+        Some(min) if !coverage_ok => {
+            if !json {
+                println!("coverage {coverage:.1}% is below the required {min:.1}%");
+            }
+            Ok(1)
+        }
+        _ => Ok(0),
     }
-    println!(
-        "catalog drift: {} added, {} removed",
-        diff.added.len(),
-        diff.removed.len()
-    );
-    Ok(1)
 }
 
 #[cfg(test)]
@@ -570,7 +983,7 @@ mod tests {
     use super::*;
 
     fn opts(context: bool) -> ExtractionOptions {
-        options(context, &[], &[], &[])
+        options(context, &[], &[], &[], false, false)
     }
 
     #[test]
@@ -606,6 +1019,8 @@ mod tests {
             &["custom".to_string()],
             &["pre".to_string()],
             &["data-x".to_string()],
+            false,
+            false,
         );
         assert!(o.with_context);
         assert_eq!(o.extra_translatable_elements, vec!["custom"]);
